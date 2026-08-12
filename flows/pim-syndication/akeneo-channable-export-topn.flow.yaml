@@ -1,0 +1,76 @@
+status: disabled
+# ============================================================================
+# Akeneo Channable Export — Top-N feed
+# ============================================================================
+# A channable product feed whose size is capped by a runtime parameter. The
+# `filter: limit: ${max-items}` is a DYNAMIC limit (a ${ref}, not a static
+# literal) — earlier versions declined CSV pass-through fusion and forced the
+# whole table to materialise; now it fuses as a streaming RowLimit resolved at
+# chain-compile, so a "give me the top 500 products" feed streams end-to-end
+# without ever holding the full catalogue in memory.
+#
+# Pipeline: S3 CSV -> dynamic top-N filter -> stream -> dash->underscore rename
+#           -> wildcard bool coercion -> semicolon CSV. Same no-op-safe stream
+#           idiom as the other channable variants (convert: to: csv, no from:).
+# ============================================================================
+
+version: "1.0.0"
+
+using:
+  - environment/akeneo-channable-export
+  - zenvara/s3
+  - zenvara/filesystem
+
+input:
+  # Caller caps the feed size; 0 / absent / negative ⇒ no cap (all rows),
+  # matching FilterEngine.applyLimitOffset semantics.
+  max-items: !int? 500
+
+output:
+  _mime-type: text/csv
+  feed-csv: !str
+
+steps:
+  - $export-csv:
+      read: s3.object
+      with: { Bucket: "example-akeneo-bucket", Key: "export_channable_export.csv" }
+
+  - log: "Downloaded export CSV — ${export-csv.size} bytes"
+
+  - $export-data:
+      load: "${export-csv.path}"
+      format: csv
+      delimiter: ";"
+
+  # a runtime ${ref} limit now fuses (streaming RowLimit). The chain
+  # stops pulling rows from the S3 CSV reader once max-items rows have passed.
+  - $topn:
+      filter: "${export-data.items}"
+      limit: "${max-items}"
+
+  - stream:
+      from: "${topn.items}"
+      batch-size: 5000
+    after:
+      - $patched:
+          map: "${_batch.items}"
+          rename:
+            "/-/": "_"
+      - $boolified:
+          map: "${patched.items}"
+          apply:
+            "*":
+              "[yes]": "true"
+              "[no]":  "false"
+      - $batch-csv:
+          convert: "${boolified.items}"
+          to: csv
+          delimiter: ";"
+          no-headers: "${= _batch.index > 1}"
+    collect:
+      feed-csv: "${batch-csv.items}"
+
+  - log: "Output complete — ${= len(feed-csv)} chars of CSV (capped at ${max-items})"
+
+  - return:
+      feed-csv: "${feed-csv}"

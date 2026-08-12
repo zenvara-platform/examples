@@ -1,0 +1,50 @@
+version: "1.0.0"
+# Marquee resilience demo (kaizen R29): a CONCURRENCY-GATED, retrying, sub-flow-
+# composing multi-stage ingest — the "happy-path" companion to the saga's rollback.
+#
+# Showcases four resilience features in one realistic pipeline:
+#   - concurrency: max 1 / on-conflict: skip  → overlapping triggers never pile up
+#     (a slow ingest in flight makes the next fire a clean no-op, not a backlog).
+#   - retry: max-attempts on $extract          → a flaky upstream is tolerated with
+#     exponential backoff before the step is declared failed.
+#   - invoke: enrich-records                    → the transform stage is a reusable
+#     SUB-FLOW (cross-flow composition); its failure/stop propagates to this parent.
+#   - on-failure: <recovery block>              → on any failure the recovery steps
+#     run (here a page/alert) — recovery steps no longer inherit the main flow's CSV
+#     pass-through fusion plans.
+#
+# Demo wiring: the stage calls hit the always-up /health endpoint so the pipeline
+# completes; point $extract at a flaky source to watch the retry, or break a stage
+# to watch the recovery block fire. In production these are your source / enrichment
+# service / warehouse connections.
+concurrency:
+  max: 1
+  on-conflict: skip
+on-failure:
+  - log-warn: "ingest failed — paging on-call (recovery block)"
+using:
+  - flow/enrich-records
+  - http
+output:
+  loaded: !str?
+steps:
+  - $extract:
+      invoke: http.get
+      with:
+        Url: "http://127.0.0.1:5000/health"      # source: pull the batch
+        Hosts:
+          - 127.0.0.1
+      retry:
+        max-attempts: 3
+      timeout: 10s
+  - $enrich:
+      invoke: enrich-records                       # transform stage (sub-flow)
+  - $load:
+      invoke: http.get
+      with:
+        Url: "http://127.0.0.1:5000/health"      # warehouse: load the result
+        Hosts:
+          - 127.0.0.1
+      timeout: 10s
+  - return:
+      loaded: "ingest-complete"

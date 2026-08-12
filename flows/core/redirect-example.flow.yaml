@@ -1,0 +1,20 @@
+status: active
+# smoke-test fixture: redirect-mode return.
+# Usage: GET /api/v1/live/flows/redirect-example/serve?target=https://example.com/x
+# Expected: HTTP 302 with Location: <target>, empty response body, and an
+# activity/runs/redirect-example/{id}/output.redirect sentinel on disk.
+
+version: "1.0.0"
+
+input:
+  target: !str https://example.com/x
+  status: !int? 302
+
+output:
+  redirect: !str
+  status: !int?
+
+steps:
+  - return:
+      redirect: "${target}"
+      status: "${status}"

@@ -1,0 +1,34 @@
+description: Cross-cloud copy — download an object from GCS into the run cache, then re-upload it to Azure Blob Storage, byte-for-byte. Proves a single flow can move data between two different cloud backends through the cache.
+using:
+  - environment/cloud-showcase
+  - zenvara/azure-blob-storage as azure-blob-storage
+  - zenvara/gcs as gcs
+output:
+  azure-head: !obj
+  bytes: !int
+steps:
+  - $dl:
+      read: gcs.object
+      with:
+        Bucket: "example-bucket"
+        Key: "seed.csv"
+    on: "gcs"
+
+  - $azup:
+      create: azure-blob-storage.object
+      with:
+        Container: "example-archive"
+        Key: "showcase/from-gcs-seed.csv"
+        Input: "${dl.path}"
+    on: "az"
+
+  - $verify:
+      invoke: azure-blob-storage.head-object
+      with:
+        Container: "example-archive"
+        Key: "showcase/from-gcs-seed.csv"
+    on: "az"
+
+  - return:
+      azure-head: "${verify.data}"
+      bytes: "${dl.size}"

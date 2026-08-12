@@ -1,0 +1,85 @@
+status: active
+# Email Task Reply Handling Flow (Flow)
+# Monitors a mailbox for reply emails that reference task IDs,
+# extracts the task context, and posts the reply as a Jira comment.
+#
+# Brand concept: "Flow" (Zen) — composing email replies into task workflows.
+#
+# Designed to be triggered by a mail trigger:
+#   triggers:
+#     - source: mail
+#       flow: email-task-reply
+#       settings:
+#         environment: mail-prod
+#         subject: "Re:*[*-*]*"
+#
+# Can also be invoked manually:
+#   run-flow(name="email-task-reply")
+
+input:
+  Folder: !str INBOX             # IMAP folder to monitor
+  MaxMessages: !str 20           # Max emails to process per run
+  ProjectPrefix: !str?           # Jira project key prefix to match
+
+using:
+  - zenvara/imap
+  - zenvara/ai
+  - zenvara/jira
+
+output:
+  status: !str
+  processed: !str
+  folder: !str
+
+steps:
+  # Fetch unread emails that look like task replies
+  - $fetch:
+      invoke: imap.fetch
+      with:
+        Folder: "${Folder}"
+        UnreadOnly: true
+        MaxMessages: "${MaxMessages}"
+        MarkAsRead: true
+        IncludeBody: true
+        SearchText: "Re:"
+
+  - log: "Fetched ${= len(fetch.messages)} reply email(s) for task processing"
+
+  # Process each reply email
+  - for-each: $mail in "${fetch.messages}"
+    do:
+      # Use the configured AI provider to extract the task key + reply text.
+      - $extract:
+          invoke: ai.call
+          with:
+            SystemPrompt: |
+              You extract Jira issue keys and reply content from emails.
+              Given an email subject and body, find the Jira issue key (pattern: UPPERCASE-DIGITS,
+              e.g., PROJ-123) in the subject line, and extract the reply text
+              (everything before the quoted/forwarded content).
+
+              Respond ONLY with valid JSON:
+              {
+                "issueKey": "PROJ-123",
+                "replyText": "the clean reply text",
+                "hasIssueKey": true
+              }
+              If no issue key is found, set issueKey to "" and hasIssueKey to false.
+              No markdown fences.
+            Prompt: "Subject: ${mail.subject}\nFrom: ${mail.from}\n\n${mail.body}"
+
+      # Post the reply as a Jira comment if an issue key was found
+      - if: "path(extract.content, '$.hasIssueKey') = true"
+        $post-comment:
+          create: jira.comment
+          with:
+            IssueKey: "${= path(extract.content, '$.issueKey')}"
+            Body: "Reply from ${mail.from}:\n\n${= path(extract.content, '$.replyText')}"
+
+      - log: "Processed reply for: ${mail.subject}"
+
+  # Output summary
+  - return:
+      status: "completed"
+      processed: "${= len(fetch.messages)}"
+      folder: "${Folder}"

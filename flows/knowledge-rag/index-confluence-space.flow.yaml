@@ -1,0 +1,118 @@
+status: active
+# Index Confluence Space Flow (Vara RAG — incremental sync)
+# Indexes a Confluence space into the semantic vector store so its pages are retrievable
+# via knowledge.retrieve / knowledge:///search.
+#
+# INCREMENTAL: a cheap CQL list (version numbers only, NO bodies) builds a
+# { SourceId, Version } manifest; knowledge.plan-sync diffs it against what is already
+# indexed; only new/changed pages have their storage body read + re-embedded, and pages
+# deleted from the space are pruned via knowledge.forget. Unchanged pages are neither
+# re-fetched nor re-embedded. The reconcile engine is source-agnostic — index-repo-docs
+# uses the identical shape keyed on a git blob SHA instead of the page version number.
+#
+# The change signal here is the page `version.number` (a weak but sufficient monotonic
+# counter Confluence bumps on every edit); a git blob SHA (index-repo-docs) or an S3
+# ETag is a strong content hash. Either works — plan-sync compares whatever token the
+# manifest supplies against the stored one.
+#
+# Confluence page bodies are storage format (XHTML), NOT markdown — so Format: html
+# normalizes them to clean markdown (HtmlConverters) before the heading-aware chunker
+# embeds them, instead of char-window-splitting raw XHTML tags into the vectors.
+#
+# The bound environment must provide a `zenvara/confluence` connection AND an
+# embedding (zenvara/knowledge) connection, e.g. `ai-vector-default`. The
+# Confluence service account needs read access to the queried space.
+#
+# Invoke (the environment selects both connections):
+#   run-flow(name="index-confluence-space", parameters={"SpaceKey":"ENG"})
+#
+# Parameters:
+#   SpaceKey   - Confluence space key to index (e.g. ENG)
+#   Collection - vector collection to index into (default: "confluence")
+
+input:
+  SpaceKey: !str                  # Confluence space key (e.g. ENG)
+  Collection: !str confluence     # Target vector collection
+
+using:
+  - zenvara/confluence
+  - zenvara/knowledge
+
+output:
+  status: !str
+  indexed: !str
+  space: !str
+
+steps:
+  # 1. List every page in the space CHEAPLY — request only `version` (NOT body.storage),
+  #    so no page bodies are fetched here. Search results wrap each page under `content`.
+  - $pages:
+      list: confluence.page
+      with:
+        cql: 'type = "page" AND space = "${SpaceKey}"'
+        Fields: ["version"]
+
+  # 2. Build the cheap { SourceId, Version } manifest — page id + version number (the
+  #    change signal). A named for-each collects one { SourceId, Version } per page.
+  - $manifest:
+      for-each: $page in "${pages}"
+      collect:
+        _value:
+          SourceId: "${page.content.id}"
+          Version: "${page.content.version.number}"
+      do:
+        - log: "index-confluence-space: manifest += page ${page.content.id} (v${page.content.version.number})"
+
+  # 3. Plan the incremental sync: diff the manifest against what is already indexed.
+  - $plan:
+      invoke: knowledge.plan-sync
+      with:
+        Collection: "${Collection}"
+        SourceSystem: "confluence"
+        Manifest: "${manifest.items}"
+
+  - log: "index-confluence-space: ${= len(plan.toIndex)} new/changed, ${= len(plan.toDelete)} deleted (of ${= len(pages)} page(s)) in space ${SpaceKey}"
+
+  # 4. Fetch + index ONLY the new/changed pages — pull each changed page's storage body
+  #    via a single-id CQL search (a `list: page` with `id = "<id>"`; the entity
+  #    `read: page` verb has a validator gap for the Fields projection, while the search
+  #    list is clean and returns the body inline under `content`). Normalize HTML→markdown
+  #    (Format: html) and stamp the plan's `version` token as `Version` so the
+  #    next run skips this page while unchanged.
+  - for-each: $item in "${plan.toIndex}"
+    do:
+      - $one:
+          list: confluence.page
+          with:
+            cql: 'id = "${item.sourceId}"'
+            Fields: ["body.storage"]
+
+      - $index:
+          invoke: knowledge.index
+          with:
+            Content: "${one[0].content.body.storage.value}"
+            Collection: "${Collection}"
+            SourceSystem: "confluence"
+            SourceId: "${item.sourceId}"
+            Version: "${item.version}"
+            Title: "${one[0].content.title}"
+            Format: html
+
+      - log: "index-confluence-space: indexed ${item.sourceId} (${index.chunksIndexed} chunk(s))"
+
+  # 5. Prune pages DELETED from the space (indexed before, absent now).
+  - for-each: $del in "${plan.toDelete}"
+    do:
+      - $forget:
+          invoke: knowledge.forget
+          with:
+            Collection: "${Collection}"
+            SourceSystem: "confluence"
+            SourceId: "${del.sourceId}"
+
+      - log: "index-confluence-space: forgot page ${del.sourceId} (deleted from space)"
+
+  - return:
+      status: "completed"
+      indexed: "${= len(plan.toIndex)}"
+      space: "${SpaceKey}"

@@ -1,0 +1,99 @@
+description: Full Azure Blob Storage round-trip — stage, upload, exists, head, list, server-side copy, cross-container move, delete. Proves the azure-blob-storage connector's complete object lifecycle, including a move with NO data loss / NO partial.
+using:
+  - environment/cloud-showcase
+  - zenvara/filesystem as filesystem
+  - zenvara/azure-blob-storage as azure-blob-storage
+output:
+  staged-path: !str
+  exists-after-upload: !bool
+  head-data: !any
+  list-keycount: !int
+  copy-status: !str
+  move-status: !str
+  exists-src-after-move: !bool
+  exists-dest-after-move: !bool
+  delete-resp: !any?
+steps:
+  - $save:
+      create: filesystem.file
+      with:
+        Path: "showcase-azure-stage.txt"
+        Content: "hello-azure-showcase"
+
+  - $upload:
+      create: azure-blob-storage.object
+      with:
+        Container: "example-container"
+        Key: "showcase/up.txt"
+        Input: "${save.path}"
+    on: "az"
+
+  - $exists-up:
+      invoke: azure-blob-storage.exists
+      with:
+        Container: "example-container"
+        Key: "showcase/up.txt"
+    on: "az"
+
+  - $head:
+      invoke: azure-blob-storage.head-object
+      with:
+        Container: "example-container"
+        Key: "showcase/up.txt"
+    on: "az"
+
+  - $listed:
+      invoke: azure-blob-storage.list-objects
+      with:
+        Container: "example-container"
+        Prefix: "showcase/"
+    on: "az"
+
+  - $copied:
+      invoke: azure-blob-storage.copy
+      with:
+        Container: "example-container"
+        Key: "showcase/up.txt"
+        DestKey: "showcase/copy.txt"
+    on: "az"
+
+  - $moved:
+      invoke: azure-blob-storage.move
+      with:
+        Container: "example-container"
+        Key: "showcase/copy.txt"
+        DestContainer: "example-archive"
+        DestKey: "showcase/moved.txt"
+    on: "az"
+
+  - $exists-src:
+      invoke: azure-blob-storage.exists
+      with:
+        Container: "example-container"
+        Key: "showcase/copy.txt"
+    on: "az"
+
+  - $exists-dest:
+      invoke: azure-blob-storage.exists
+      with:
+        Container: "example-archive"
+        Key: "showcase/moved.txt"
+    on: "az"
+
+  - $deleted:
+      delete: azure-blob-storage.object
+      with:
+        Container: "example-container"
+        Key: "showcase/up.txt"
+    on: "az"
+
+  - return:
+      staged-path: "${save.path}"
+      exists-after-upload: "${exists-up.exists}"
+      head-data: "${head.data}"
+      list-keycount: "${listed.keyCount}"
+      copy-status: "${copied.status}"
+      move-status: "${moved.status}"
+      exists-src-after-move: "${exists-src.exists}"
+      exists-dest-after-move: "${exists-dest.exists}"
+      delete-resp: "${deleted.response}"

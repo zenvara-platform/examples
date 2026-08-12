@@ -1,0 +1,18 @@
+version: "1.0.0"
+# Sub-flow: the transform / enrich stage invoked by resilient-ingest-pipeline.
+# Kept separate so the ingest pipeline composes it via `using: - flow/enrich-records`
+# — demonstrating cross-flow composition (a sub-flow as a reusable building block).
+using:
+  - http
+output:
+  enriched: !str?
+steps:
+  - $lookup:
+      invoke: http.get
+      with:
+        Url: "http://127.0.0.1:5000/health"
+        Hosts:
+          - 127.0.0.1
+      timeout: 10s
+  - return:
+      enriched: "records-enriched"

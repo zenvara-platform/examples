@@ -1,0 +1,81 @@
+version: "1.0.0"
+# Marquee DURABLE saga demo: an event-sourced order-fulfillment saga that runs
+# on the PersistentFlowActor.
+#
+# `durable: true` opts the flow into the durable (event-sourced) run path: the
+# engine routes this flow to the PersistentFlowActor, journals a `RunEvent` per
+# step, and can resume a half-finished saga after a crash by replaying the
+# journal.
+#
+# A durable flow may use only the NON-streaming step kinds the event-sourced
+# engine supports — operation / for-each / if / switch / stop / skip / log /
+# output / var-assign. Streaming kinds (filter/stream/map/join/convert/load/
+# delta/sync/aggregate/render and sub-flow invoke) are rejected at compile time
+# with V1322. This flow uses only `operation` (http.get) + `return`,
+# so it compiles clean for the durable path.
+#
+# Three side-effecting steps run in order, each with an explicit `compensate:`
+# block that undoes its effect. With `on-failure: compensate`, if a later step
+# fails after earlier steps committed, the engine drains the compensation stack
+# in LIFO order — refunding the payment, then releasing the inventory
+# reservation — journaling CompensationStarted / CompensationStepCompleted /
+# CompensationCompleted, then exits with a typed error.
+#
+# Demo wiring: the happy-path calls hit the always-up /health endpoint; the final
+# carrier "create-shipment" call hits a dead port to FORCE the rollback so the
+# durable saga visibly compensates. Swap the carrier URL for a real endpoint to
+# see the all-success path. In production these would be your ERP / PSP / carrier
+# connections.
+durable: true
+on-failure: compensate
+using:
+  - http
+output:
+  confirmation: !str?
+steps:
+  # 1) Reserve inventory. Compensate = release the reservation.
+  - $reserve-inventory:
+      invoke: http.get
+      with:
+        Url: "http://127.0.0.1:5000/health"      # ERP: reserve stock
+        Hosts:
+          - 127.0.0.1
+      retry:
+        max-attempts: 3
+      timeout: 10s
+    compensate:
+      invoke: http.get
+      with:
+        Url: "http://127.0.0.1:5000/health"      # ERP: release the reservation
+        Hosts:
+          - 127.0.0.1
+
+  # 2) Charge payment. Compensate = refund.
+  - $charge-payment:
+      invoke: http.get
+      with:
+        Url: "http://127.0.0.1:5000/health"      # PSP: capture payment
+        Hosts:
+          - 127.0.0.1
+      retry:
+        max-attempts: 3
+      timeout: 10s
+    compensate:
+      invoke: http.get
+      with:
+        Url: "http://127.0.0.1:5000/health"      # PSP: refund the charge
+        Hosts:
+          - 127.0.0.1
+
+  # 3) Create shipment. Demo: carrier is unreachable → the durable saga rolls
+  #    back (refund payment, then release inventory) in LIFO order.
+  - $create-shipment:
+      invoke: http.get
+      with:
+        Url: "http://127.0.0.1:12345/carrier/ship"
+        Hosts:
+          - 127.0.0.1
+      timeout: 5s
+
+  - return:
+      confirmation: "order-fulfilled"

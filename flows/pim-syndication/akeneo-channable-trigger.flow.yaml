@@ -1,0 +1,82 @@
+status: active
+# ============================================================================
+# Akeneo Channable Trigger — manual fire-all for the 5 exports the DE/FR
+# flows actually consume
+# ============================================================================
+# No schedule — Akeneo now runs the export profiles on its own cron.
+# This flow stays for manual ad-hoc "kick everything now" operations
+# (debugging, force-refresh). Invoke via MCP / Studio when needed.
+#
+# `product_references` replaced the older `verkn` relationship lookup.
+# Removed: channable_export_attribute_options (not consumed by DE/FR
+# flows after the $with-options pruning — attribute metadata
+# itself is still needed for the select-attr rename generator).
+# ============================================================================
+
+version: "1.0.0"
+
+
+using:
+  - environment/akeneo-channable-export
+  - zenvara/akeneo
+
+concurrency:
+  max: 1
+  on-conflict: skip
+
+output:
+  status: !str
+
+steps:
+  - $trigger-export:
+      invoke: akeneo.request
+      with:
+        Method: "POST"
+        Path: "/api/rest/v1/jobs/export/channable_export"
+        Body:
+          _trigger: true
+    rollback: none
+  - log: "channable_export (DE) - ${trigger-export.statusCode}"
+
+  - $trigger-export-fr:
+      invoke: akeneo.request
+      with:
+        Method: "POST"
+        Path: "/api/rest/v1/jobs/export/channable_export_fr"
+        Body:
+          _trigger: true
+    rollback: none
+  - log: "channable_export_fr - ${trigger-export-fr.statusCode}"
+
+  - $trigger-product-refs:
+      invoke: akeneo.request
+      with:
+        Method: "POST"
+        Path: "/api/rest/v1/jobs/export/channable_export_product_references"
+        Body:
+          _trigger: true
+    rollback: none
+  - log: "channable_export_product_references - ${trigger-product-refs.statusCode}"
+
+  - $trigger-ref:
+      invoke: akeneo.request
+      with:
+        Method: "POST"
+        Path: "/api/rest/v1/jobs/export/channable_export_referenzen"
+        Body:
+          _trigger: true
+    rollback: none
+  - log: "channable_export_referenzen - ${trigger-ref.statusCode}"
+
+  - $trigger-attribute:
+      invoke: akeneo.request
+      with:
+        Method: "POST"
+        Path: "/api/rest/v1/jobs/export/channable_export_attribute"
+        Body:
+          _trigger: true
+    rollback: none
+  - log: "channable_export_attribute - ${trigger-attribute.statusCode}"
+
+  - return:
+      status: "all exports triggered"

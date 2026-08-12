@@ -1,0 +1,12 @@
+# Environment: example
+# An environment is a named composition of connections — the profile a flow runs against.
+# Each alias maps to a named connection via the nested form: alias: { connection: <name> }
+
+kind: development
+status: active
+
+connections:
+  db:
+    connection: example-mssql
+  mail:
+    connection: example-email

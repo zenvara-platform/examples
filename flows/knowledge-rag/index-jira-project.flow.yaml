@@ -1,0 +1,76 @@
+status: active
+# Index Jira Project Flow (Vara RAG — Story B)
+# Searches a Jira project by JQL and indexes each issue's summary + description
+# into the semantic vector store (knowledge.index) so issues are retrievable via
+# knowledge.retrieve / knowledge:///search. Re-running replaces an issue's chunks
+# (SourceId = issue key), never duplicates.
+#
+# This is the productised, general-purpose shape of a flow proven internally
+# against a real Jira project — a whole project indexed and retrieved with citations.
+#
+# The bound environment must provide a `zenvara/jira` connection AND an embedding
+# (zenvara/knowledge) connection, e.g. `ai-vector-default`. The Jira service
+# account needs read access to the queried project.
+#
+# Invoke (the environment selects both connections):
+#   run-flow(name="index-jira-project", parameters={"Jql":"project = PROJ ORDER BY updated DESC"})
+#
+# Parameters:
+#   Jql        - JQL selecting the issues to index
+#   Collection - vector collection to index into (default: "jira")
+
+input:
+  Jql: !str                 # JQL query selecting the issues to index
+  Collection: !str jira     # Target vector collection
+
+using:
+  - zenvara/jira
+  - zenvara/knowledge
+
+vars:
+  issues: !obj-list
+
+output:
+  status: !str
+  indexed: !str
+
+steps:
+  # Pull the matching issues (the entity list maps to jira.search-issues), draining
+  # every page. The plain `list:` verb issues a single call and silently
+  # caps at the connector's first-page default (50 rows) — `stream: from: list:`
+  # auto-paginates the full result set.
+  - $fetch-issues:
+      stream:
+        from:
+          list: jira.issue
+          with:
+            Jql: "${Jql}"
+          result-path: data.issues
+        batch-size: 100
+      after:
+        - $batch: "${_batch.items}"
+      collect:
+        issues: "${batch}"
+
+  - log: "index-jira-project: found ${= len(issues)} issue(s)"
+
+  # Index each issue's summary + description, cited back by issue key.
+  # summary/description live under the raw Jira issue's `fields:` object (Jira REST
+  # shape), not at the issue root — `issue.key` is the one top-level field.
+  - for-each: $issue in "${issues}"
+    do:
+      - $index:
+          invoke: knowledge.index
+          with:
+            Content: "${issue.fields.summary}\n\n${issue.fields.description}"
+            Collection: "${Collection}"
+            SourceSystem: "jira"
+            SourceId: "${issue.key}"
+            Title: "${issue.fields.summary}"
+            IsMarkdown: false
+
+      - log: "index-jira-project: indexed ${issue.key} (${index.chunksIndexed} chunk(s))"
+
+  - return:
+      status: "completed"
+      indexed: "${= len(issues)}"

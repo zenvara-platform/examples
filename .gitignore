@@ -1,0 +1,5 @@
+# samples/ is a whole-tree mirror of github.com/zenvara-platform/examples.
+# Keep this file free of anything the sync job wouldn't want to carry into the
+# public clone — a build artifact, a local scratch file, an editor swap file.
+*.tmp
+.DS_Store

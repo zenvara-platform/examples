@@ -1,0 +1,54 @@
+version: "1.0.0"
+description: |
+  Minimal CI pipeline in a single flow: compile a project with the build
+  connector, then run its test suite, branching on build success and returning
+  structured pass/fail counts. Proves the build connector's stated purpose —
+  "Generic code build connector for CI/CD workflows" — end to end.
+
+  Tool is dotnet here; the same shape works for node/maven by changing Tool +
+  the per-tool options block. Pass the project/solution path as `Project`.
+using:
+  - zenvara/build
+input:
+  Project: !str
+let:
+  configuration: "Release"
+output:
+  built: !bool
+  outcome: !str
+  total-tests: !int
+  passed: !int
+  failed: !int
+steps:
+  - $build:
+      invoke: build.run
+      with:
+        Tool: dotnet
+        Project: "${Project}"
+        Dotnet:
+          Configuration: "${configuration}"
+        Verbosity: quiet
+  - if: "build.success"
+    do:
+      - $test:
+          invoke: build.test
+          with:
+            Tool: dotnet
+            Project: "${Project}"
+            Dotnet:
+              Configuration: "${configuration}"
+              NoBuild: true
+            Verbosity: quiet
+      - return:
+          built: true
+          outcome: "${= test.failed > 0 ? 'tests-failed' : 'green'}"
+          total-tests: "${test.totalTests}"
+          passed: "${test.passed}"
+          failed: "${test.failed}"
+    else:
+      - return:
+          built: false
+          outcome: "build-failed"
+          total-tests: 0
+          passed: 0
+          failed: 0

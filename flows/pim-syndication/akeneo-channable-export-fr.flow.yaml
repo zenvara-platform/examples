@@ -1,0 +1,291 @@
+status: disabled
+# ============================================================================
+# Akeneo Channable Export FR — Cache-served feed
+# ============================================================================
+# Mirrors akeneo-channable-export-de. Suffix: `{code}_fr_CH`. Output guards:
+# empty-feed error + |byte-size delta| <= 20% vs prior successful run (warn
+# → cache write skipped, grace-period serves last good feed). Zabbix tier
+# split: Information at >10% delta, Warning at cache_skipped=1 (>20%). See
+# DE flow header for the full architecture and rationale.
+# ============================================================================
+
+version: "1.0.0"
+
+using:
+  - environment/akeneo-channable-export
+  - zenvara/s3
+  - zenvara/zabbix-sender
+  - zenvara/filesystem
+
+triggers:
+  - name: s3-fr-events
+    type: sqs
+    queue-url: "https://sqs.eu-central-1.amazonaws.com/123456789012/example-s3-events-fr"
+    region: eu-central-1
+    ack-on: receive
+    debounce: 300000
+    filter: "message.Records[0].s3.object.key = 'export_channable_export_fr.csv'"
+
+concurrency:
+  max: 1
+  on-conflict: skip
+
+persist:
+  prior-bytes: !int?
+
+output:
+  _mime-type: text/csv
+  # channable-feed-policy lives in the customer's own config repo, not
+  # in this sample — inlined here with its documented values so the
+  # flow validates standalone instead of dangling on an unresolvable named ref.
+  _cache:
+    ttl: 4h
+    grace-period: 12h
+    refresh-on: [trigger, schedule, warmup]
+    on-miss: rebuild
+  _guards:
+    - check: "_output.fields.feed-csv.length > 0"
+      message: "Refusing to publish empty channable FR feed"
+      severity: error
+    - check: "_output.byte-size >= _prior.byte-size * 0.8 && _output.byte-size <= _prior.byte-size * 1.2"
+      message: "FR feed deviated by >20% vs prior run — cache write skipped, grace-period serves last good feed"
+      severity: warn
+  feed-csv: !str
+
+steps:
+  - $export-csv:
+      read: s3.object
+      with:
+        Bucket: "example-akeneo-bucket"
+        Key: "export_channable_export_fr.csv"
+  - log: "Downloaded FR export - ${export-csv.size} bytes"
+
+  - $codes-csv:
+      read: s3.object
+      with:
+        Bucket: "example-akeneo-bucket"
+        Key: "export_channable_export_product_references.csv"
+  - log: "Downloaded product_references - ${codes-csv.size} bytes"
+
+  - $ref-csv:
+      read: s3.object
+      with:
+        Bucket: "example-akeneo-bucket"
+        Key: "export_channable_export_referenzen.csv"
+
+  - $attrs-csv:
+      read: s3.object
+      with:
+        Bucket: "example-akeneo-bucket"
+        Key: "export_channable_export_attribute.csv"
+  - log: "Downloaded attribute metadata - ${attrs-csv.size} bytes"
+
+  - $attrs-data:
+      load: "${attrs-csv.path}"
+      format: csv
+      delimiter: ";"
+
+  - $select-attrs:
+      filter: "${attrs-data.items}"
+      where: "type = 'pim_catalog_simpleselect' OR type = 'pim_catalog_multiselect'"
+
+  - $rename-suffix:
+      for-each: $attr in "${select-attrs.items}"
+      key: "${attr.code}"
+      collect:
+        _value: "${suffixed}"
+      do:
+        - $suffixed: "${attr.code}_fr_CH"
+
+  - $codes-data:
+      load: "${codes-csv.path}"
+      format: csv
+      delimiter: ";"
+
+  - $codes-slim:
+      filter: "${codes-data.items}"
+      exclude-fields:
+        - categories
+        - enabled
+        - family
+        - parent
+        - groups
+
+  - $export-data:
+      load: "${export-csv.path}"
+      format: csv
+      delimiter: ";"
+
+  - $export-slim:
+      filter: "${export-data.items}"
+      exclude-fields:
+        - categories
+        - parent
+        - groups
+
+  - $with-codes:
+      join: "${codes-slim.items}"
+      from: "${export-slim.items}"
+      on: at_item_number
+      type: left
+
+  - $ref-data:
+      load: "${ref-csv.path}"
+      format: csv
+      delimiter: ";"
+
+  - $enriched:
+      join: "${ref-data.items}"
+      from: "${with-codes.items}"        # chain-linked LEFT
+      using: code
+      lookup-by:
+        field: referenceEntityIdentifier
+        split: ","                       # split multi-value left keys
+      mapping:
+        "re_*":  "at_*"
+        re_size: at_size_reference
+      fields:
+        - label-de_CH
+        - label-fr_CH
+        - image
+        - brand
+        - code
+        - date_record_last_updated
+        - description
+        - description-de_CH
+        - description-fr_CH
+        - product_type_singular_de
+        - product_type_singular_fr
+      type: left
+      preserve-empty-columns: false
+
+  - stream:
+      from: "${enriched}"
+      batch-size: 5000
+    after:
+      - $delabelled:
+          map: "${_batch.items}"
+          rename:
+            "/_label-/": "_"
+            "/-/":       "_"
+          exclude-fields:
+            - at_product_type_singular_de_CH
+            - re_sustainability_product_type_singular_de
+            - re_sustainability_product_type_singular_fr
+            - re_swimgoggles_tint_brand
+            - re_swimgoggles_tint_date_record_last_updated
+            - re_swimgoggles_tint_description
+            - pack_groups
+            - pack_products
+            - pack_product_models
+            - upsell_groups
+            - upsell_products
+            - upsell_product_models
+            - spare_parts_groups
+            - x_sell_groups
+            - x_sell_products
+            - x_sell_product_models
+            - alternative_products_groups
+            - related_products_groups
+      # fused wildcard whole-cell coercion. Single global
+      # lookup applied to every cell; whole-string match — bracketed
+      # reference codes never collide with the bool tokens. Compiles
+      # to a `RowCoerce` stage post-rename inside csv-passthrough so
+      # the chain stays fused.
+      - $boolified:
+          map: "${delabelled.items}"
+          apply:
+            "*":
+              "[yes]": "true"
+              "[no]":  "false"
+      - $normalized:
+          map: "${boolified.items}"
+          rename: "${rename-suffix.items}"
+      - $csv-batch:
+          convert: "${normalized.items}"
+          to: csv
+          delimiter: ";"
+          no-headers: "${= _batch.index > 1}"
+    collect:
+      feed-csv: "${csv-batch.items}"
+      row-count: "${= len(_batch.items)}"
+      byte-count: "${= len(csv-batch.items)}"
+      prior-bytes: "${= len(csv-batch.items)}"   # tracks current bytes for next-run delta
+
+  - $metrics-status:
+      invoke: zabbix-sender.send
+      with:
+        Host: "zabbix.example.com"
+        Port: 10051
+        SenderHost: "example-zenvara"
+        ItemKey: "channable.export.status[fr]"
+        Data: "1"
+    retry:
+      max-attempts: 2
+      initial-delay-ms: 500
+
+  - $metrics-rows:
+      invoke: zabbix-sender.send
+      with:
+        Host: "zabbix.example.com"
+        Port: 10051
+        SenderHost: "example-zenvara"
+        ItemKey: "channable.export.rows[fr]"
+        Data: "${row-count}"
+    retry:
+      max-attempts: 2
+      initial-delay-ms: 500
+
+  - $metrics-bytes:
+      invoke: zabbix-sender.send
+      with:
+        Host: "zabbix.example.com"
+        Port: 10051
+        SenderHost: "example-zenvara"
+        ItemKey: "channable.export.bytes[fr]"
+        Data: "${byte-count}"
+    retry:
+      max-attempts: 2
+      initial-delay-ms: 500
+
+  # deviation telemetry — skipped on first run (prior-bytes is null)
+  - if: "prior-bytes IS NOT null AND prior-bytes > 0"
+    do:
+      - if: "byte-count >= prior-bytes"
+        do:
+          - $delta-bytes: "${= byte-count - prior-bytes}"
+        else:
+          - $delta-bytes: "${= prior-bytes - byte-count}"
+      - $delta-pct: "${= delta-bytes * 100 / prior-bytes}"
+      - if: "delta-pct > 20"
+        do:
+          - $cache-skipped: 1
+        else:
+          - $cache-skipped: 0
+
+      - $metrics-delta-pct:
+          invoke: zabbix-sender.send
+          with:
+            Host: "zabbix.example.com"
+            Port: 10051
+            SenderHost: "example-zenvara"
+            ItemKey: "channable.export.delta_pct[fr]"
+            Data: "${delta-pct}"
+        retry:
+          max-attempts: 2
+          initial-delay-ms: 500
+
+      - $metrics-cache-skipped:
+          invoke: zabbix-sender.send
+          with:
+            Host: "zabbix.example.com"
+            Port: 10051
+            SenderHost: "example-zenvara"
+            ItemKey: "channable.export.cache_skipped[fr]"
+            Data: "${cache-skipped}"
+        retry:
+          max-attempts: 2
+          initial-delay-ms: 500
+
+  - return:
+      feed-csv: "${feed-csv}"

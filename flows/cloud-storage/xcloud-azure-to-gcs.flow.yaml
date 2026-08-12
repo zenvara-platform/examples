@@ -1,0 +1,49 @@
+description: Reverse cross-cloud copy — stage a file, upload to Azure, download it back, then upload to GCS, verifying with gcs.exists. Proves the download(filepath)→upload(filepath) cache handoff works in both directions across two cloud backends.
+using:
+  - environment/cloud-showcase
+  - zenvara/filesystem as filesystem
+  - zenvara/azure-blob-storage as azure-blob-storage
+  - zenvara/gcs as gcs
+output:
+  gcs-found: !bool
+  bytes: !int
+steps:
+  - $seed:
+      create: filesystem.file
+      with:
+        Path: "showcase/xc-payload.txt"
+        Content: "cross-cloud azure->gcs showcase payload"
+
+  - $azup:
+      create: azure-blob-storage.object
+      with:
+        Container: "example-container"
+        Key: "showcase/xc-payload.txt"
+        Input: "${seed.path}"
+    on: "az"
+
+  - $azdl:
+      read: azure-blob-storage.object
+      with:
+        Container: "example-container"
+        Key: "showcase/xc-payload.txt"
+    on: "az"
+
+  - $gcsup:
+      create: gcs.object
+      with:
+        Bucket: "example-bucket"
+        Key: "showcase/from-azure.txt"
+        Input: "${azdl.path}"
+    on: "gcs"
+
+  - $verify:
+      invoke: gcs.exists
+      with:
+        Bucket: "example-bucket"
+        Key: "showcase/from-azure.txt"
+    on: "gcs"
+
+  - return:
+      gcs-found: "${verify.exists}"
+      bytes: "${azdl.size}"

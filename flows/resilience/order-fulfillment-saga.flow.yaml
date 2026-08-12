@@ -1,0 +1,67 @@
+version: "1.0.0"
+# Marquee resilience demo (kaizen R29): a transactional ORDER-FULFILLMENT SAGA.
+#
+# Three side-effecting steps run in order, each with a retry policy (transient
+# faults are retried with exponential backoff) and an explicit `compensate:` block
+# that undoes its effect. The flow is `transactional: true` with
+# `on-failure: compensate`, so if any step fails after earlier steps committed,
+# the engine drains the compensation stack in LIFO order — refunding the payment
+# and releasing the inventory reservation — then exits with a typed error.
+#
+# Demo wiring: the happy-path calls hit the always-up /health endpoint; the final
+# carrier "create-shipment" call hits a dead port to FORCE the rollback so the saga
+# visibly compensates. Swap the carrier URL for a real endpoint to see the
+# all-success path. In production these would be your ERP / PSP / carrier connections.
+transactional: true
+on-failure: compensate
+using:
+  - http
+output:
+  confirmation: !str?
+steps:
+  # 1) Reserve inventory. Compensate = release the reservation.
+  - $reserve-inventory:
+      invoke: http.get
+      with:
+        Url: "http://127.0.0.1:5000/health"      # ERP: reserve stock
+        Hosts:
+          - 127.0.0.1
+      retry:
+        max-attempts: 3
+      timeout: 10s
+    compensate:
+      invoke: http.get
+      with:
+        Url: "http://127.0.0.1:5000/health"      # ERP: release the reservation
+        Hosts:
+          - 127.0.0.1
+
+  # 2) Charge payment. Compensate = refund.
+  - $charge-payment:
+      invoke: http.get
+      with:
+        Url: "http://127.0.0.1:5000/health"      # PSP: capture payment
+        Hosts:
+          - 127.0.0.1
+      retry:
+        max-attempts: 3
+      timeout: 10s
+    compensate:
+      invoke: http.get
+      with:
+        Url: "http://127.0.0.1:5000/health"      # PSP: refund the charge
+        Hosts:
+          - 127.0.0.1
+
+  # 3) Create shipment. Demo: carrier is unreachable → the saga rolls back
+  #    (refund payment, then release inventory) in LIFO order.
+  - $create-shipment:
+      invoke: http.get
+      with:
+        Url: "http://127.0.0.1:12345/carrier/ship"
+        Hosts:
+          - 127.0.0.1
+      timeout: 5s
+
+  - return:
+      confirmation: "order-fulfilled"

@@ -1,0 +1,74 @@
+status: active
+# Index Folder Flow (Vara RAG — Story B)
+# Walks a directory under the filesystem sandbox, reads each matching text file,
+# and indexes it into the semantic vector store (knowledge.index) so it is
+# retrievable via knowledge.retrieve / knowledge:///search. Re-running replaces a
+# file's chunks (SourceId = path), never duplicates.
+#
+# Paths are resolved under `Filesystem.Sandbox.BasePath` — `Directory`
+# is relative to that sandbox root; the connector never escapes it.
+#
+# The bound environment must provide an embedding (zenvara/knowledge) connection,
+# e.g. `ai-vector-default`. The filesystem connector is pure (no connection).
+#
+# Invoke (the environment selects the embedding connection):
+#   run-flow(name="index-folder", parameters={"Directory":"docs","Pattern":".*\\.md$"})
+#
+# Parameters:
+#   Directory  - sandbox-relative directory to walk (recursively)
+#   Pattern    - .NET regex matched against each path (default: markdown files)
+#   Collection - vector collection to index into (default: "files")
+
+input:
+  Directory: !str                       # Sandbox-relative directory to walk
+  Pattern: !str ".*\\.(md|markdown|txt)$"  # .NET regex over the path (NOT a glob)
+  Collection: !str files                # Target vector collection
+
+using:
+  - zenvara/filesystem
+  - zenvara/knowledge
+
+output:
+  status: !str
+  indexed: !str
+  directory: !str
+
+steps:
+  # Recursively list matching files under the sandboxed directory.
+  - $listing:
+      invoke: filesystem.list-dir
+      with:
+        Directory: "${Directory}"
+        Filter:
+          Pattern: "${Pattern}"
+          Recursive: true
+          Types: file
+
+  - log: "index-folder: found ${= len(listing.entries)} file(s) under '${Directory}'"
+
+  # Read + index each file. Each list-dir entry carries its sandbox-relative Path.
+  - for-each: $entry in "${listing.entries}"
+    do:
+      #/V1039: file READ is entity CRUD — `read: filesystem.file`, not
+      # `invoke: filesystem.read`. The directory LIST stays on `invoke:`.
+      - $file:
+          read: filesystem.file
+          with:
+            Path: "${entry.Path}"
+
+      - $index:
+          invoke: knowledge.index
+          with:
+            Content: "${file.Content}"
+            Collection: "${Collection}"
+            SourceSystem: "filesystem"
+            SourceId: "${entry.Path}"
+            Title: "${entry.Path}"
+            IsMarkdown: true
+
+      - log: "index-folder: indexed ${entry.Path} (${index.chunksIndexed} chunk(s))"
+
+  - return:
+      status: "completed"
+      indexed: "${= len(listing.entries)}"
+      directory: "${Directory}"

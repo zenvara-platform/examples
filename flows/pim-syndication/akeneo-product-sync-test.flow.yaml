@@ -1,0 +1,154 @@
+status: disabled
+# ============================================================================
+# Akeneo Product Sync (Test) — S3-Based Streaming Delta Sync
+# ============================================================================
+# Reads from TEST Redshift, syncs to SANDBOX Akeneo. Mirrors
+# akeneo-product-sync-live architecture exactly — only environment,
+# S3 export path, and schedule differ.
+#
+# No trigger — run manually for testing. Uses environment
+# 'akeneo-product-sync-test' which targets sandbox Akeneo.
+#
+# Currently disabled — re-activate by setting status: active when needed.
+# ============================================================================
+
+version: "1.0.0"
+
+concurrency:
+  max: 1
+  on-conflict: skip
+
+using:
+  - environment/akeneo-product-sync-test
+  - zenvara/redshift
+  - zenvara/s3
+  - zenvara/akeneo
+  - zenvara/filesystem
+
+persist:
+  catalog-hashes: !obj
+
+output:
+  status: !str
+  items-synced: !int
+  models:
+    created: !int
+    updated: !int
+    failed: !int
+  products:
+    created: !int
+    updated: !int
+    failed: !int
+  failures-uri: !str?
+
+steps:
+  - $unload:
+      invoke: redshift.unload
+      with:
+        Query: "SELECT * FROM pim.akeneoproducts"
+        Destination: "s3://example-akeneo-bucket/zenvara-staging/akeneo-sync-test/export"
+        Format: CSV
+        WriteHeaders: true
+        Delimiter: ","
+        Timeout: 600
+
+  - log: "Unloaded test products to S3"
+
+  - $file:
+      read: s3.object
+      with:
+        Bucket: "example-akeneo-bucket"
+        Key: "zenvara-staging/akeneo-sync-test/export.000"
+
+  - log: "Downloaded CSV: ${file.size} bytes"
+
+  - stream:
+      from:
+        convert: "${file.path}"
+        from: csv
+        delimiter: ","
+        headers: true
+      batch-size: 5000
+    after:
+      - $delta:
+          delta: "${_batch.items}"
+          by: hash
+          key: "__identifier"
+          from: "${catalog-hashes}"
+
+      - log: "Batch ${_batch.index}: ${delta.stats.added} new, ${delta.stats.updated} changed, ${delta.stats.unchanged} unchanged"
+
+      - if: "len(delta.items) > 0"
+        do:
+          - $synced:
+              invoke: akeneo.sync-catalog
+              with:
+                Items: "${delta.items}"
+                AttributeGroup: "ag_erp_master_data"
+                DefaultLocale: "de_CH"
+                FamilyChangePolicy: recreate
+
+          - log: "Synced: models (${synced.models.created}/${synced.models.updated}/${synced.products.failed}), options (${synced.options.created}/${synced.options.updated}/${synced.options.failed})"
+
+          - if: "synced.models.failed > 0 || synced.products.failed > 0"
+            do:
+              - $batch-failures-obj:
+                  batch: "${_batch.index}"
+                  models: "${synced.models.errors}"
+                  products: "${synced.products.errors}"
+              - $batch-failures-line: "${= toJson(batch-failures-obj)}"
+              - create: filesystem.file
+                with:
+                  Path: "E:/Zenvara/cache/${_flow-name}-${_run-id}-failures.jsonl"
+                  Content: "${batch-failures-line}\n"
+                  Append: true
+                rollback: none
+        else:
+          - $synced:
+              models:
+                created: 0
+                updated: 0
+                failed: 0
+              products:
+                created: 0
+                updated: 0
+                failed: 0
+
+    collect:
+      catalog-hashes: "${delta.hashes}"
+      items-synced: "${= len(delta.items)}"
+      models-created: "${synced.models.created}"
+      models-updated: "${synced.models.updated}"
+      models-failed: "${synced.models.failed}"
+      products-created: "${synced.products.created}"
+      products-updated: "${synced.products.updated}"
+      products-failed: "${synced.products.failed}"
+
+  - log: "Akeneo product sync complete: ${items-synced} items synced, ${models-failed} models failed, ${products-failed} products failed"
+
+  - if: "models-failed > 0 || products-failed > 0"
+    do:
+      - create: s3.object
+        with:
+          Bucket: "example-akeneo-bucket"
+          Key: "zenvara-staging/sync-failures/${_flow-name}/${_run-id}.jsonl"
+          Input: "E:/Zenvara/cache/${_flow-name}-${_run-id}-failures.jsonl"
+
+      - $failures-uri: "s3://example-akeneo-bucket/zenvara-staging/sync-failures/${_flow-name}/${_run-id}.jsonl"
+
+      - log: "Failure report uploaded to ${failures-uri}"
+    else:
+      - $failures-uri: ""
+
+  - return:
+      status: "completed"
+      items-synced: "${items-synced}"
+      models:
+        created: "${models-created}"
+        updated: "${models-updated}"
+        failed: "${models-failed}"
+      products:
+        created: "${products-created}"
+        updated: "${products-updated}"
+        failed: "${products-failed}"
+      failures-uri: "${failures-uri}"

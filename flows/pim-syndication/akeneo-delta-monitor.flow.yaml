@@ -1,0 +1,72 @@
+status: active
+# ============================================================================
+# Akeneo Delta Monitor — Track what changes in live data
+# ============================================================================
+# Dry-run flow: UNLOADs from live Redshift, detects delta against stored
+# hashes, but does NOT sync to Akeneo. Instead logs changed item counts
+# and saves a sample of changed items for analysis.
+#
+# Uses the same persist as akeneo-product-sync-live-to-sandbox so hashes
+# are shared — run the sync flow first to establish baseline.
+# ============================================================================
+
+version: "1.0.0"
+
+using:
+  - environment/akeneo-product-sync-live-to-sandbox
+  - zenvara/redshift
+  - zenvara/s3
+
+persist:
+  catalog-hashes: !obj
+
+output:
+  status: !str
+  items-changed: !int
+
+steps:
+  - $unload:
+      invoke: redshift.unload
+      with:
+        Query: "SELECT * FROM pim.akeneoproducts"
+        Destination: "s3://example-akeneo-bucket/zenvara-staging/akeneo-delta-monitor/export"
+        Format: CSV
+        WriteHeaders: true
+        Delimiter: ","
+        Timeout: 600
+
+  - log: "Unloaded live products to S3"
+
+  - $file:
+      read: s3.object
+      with:
+        Bucket: "example-akeneo-bucket"
+        Key: "zenvara-staging/akeneo-delta-monitor/export.000"
+
+  - log: "Downloaded CSV: ${file.size} bytes"
+
+  - stream:
+      from:
+        convert: "${file.path}"
+        from: csv
+        delimiter: ","
+        headers: true
+      batch-size: 5000
+    after:
+      - $delta:
+          delta: "${_batch.items}"
+          by: hash
+          key: "__identifier"
+          from: "${catalog-hashes}"
+
+      - log: "Batch ${_batch.index}: ${delta.stats.added} new, ${delta.stats.updated} changed, ${delta.stats.unchanged} unchanged"
+
+    collect:
+      catalog-hashes: "${delta.hashes}"
+      items-changed: "${= len(delta.items)}"
+
+  - log: "Monitor complete: ${items-changed} items changed (dry run — no sync)"
+
+  - return:
+      status: "completed"
+      items-changed: "${items-changed}"

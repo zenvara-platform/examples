@@ -1,0 +1,55 @@
+status: active
+# Demo Report Flow - the one worked, zero-connector seed example.
+# Assigns a small set of inline invoice line items, filters them, and renders
+# the already-seeded `example-report` Liquid template into HTML - no
+# connector, no environment, nothing to configure. Proves a fresh evaluator
+# can open Studio and get a real, working result on the first click.
+# Usage: run-flow(name="demo-report", parameters={"customer-name":"Acme Corp"})
+
+input:
+  customer-name: !str "Acme Corp"   # Customer name shown on the rendered invoice
+
+output:
+  report: !str       # Rendered HTML invoice
+  line-count: !int    # Number of billable line items included
+
+steps:
+  # Batch assignment: three separate inline variables in one step - the
+  # invoice's line items plus its number/date - hand-authored so the flow
+  # needs no connector or connection to produce something real.
+  - set:
+      orders:
+        - description: "Consulting"
+          quantity: 10
+          unit_price: 150
+          amount: 1500
+        - description: "Support"
+          quantity: 1
+          unit_price: 500
+          amount: 500
+        - description: "Training (comped)"
+          quantity: 0
+          unit_price: 250
+          amount: 0
+      invoice-number: 7
+      invoice-date: "2026-01-15T00:00:00Z"
+
+  # Array-mode filter: drop the zero-quantity comped line, sorted by amount.
+  - $billable:
+      filter: "${orders}"
+      where: "quantity > 0"
+      order-by: "amount DESC"
+
+  # Render the shipped example-report Liquid template with the filtered rows.
+  - $report:
+      render: example-report
+      with:
+        invoice_number: "${invoice-number}"
+        date: "${invoice-date}"
+        customer:
+          name: "${customer-name}"
+        orders: "${billable.items}"
+
+  - return:
+      report: "${report.content}"
+      line-count: "${= len(billable.items)}"

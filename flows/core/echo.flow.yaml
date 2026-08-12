@@ -1,0 +1,23 @@
+status: active
+# Echo Flow - Returns input parameters as output
+# Usage: run-flow(name="echo", parameters={"message":"Hello","value":"World"})
+# This flow is useful for testing MCP connectivity and parameter passing.
+
+input:
+  message: !str Hello from Zenvara  # Message to echo back
+  value: !str?                       # Optional value to include
+
+output:
+  echo: !str
+  invocation-id: !str
+  flow-name: !str
+  message: !str
+  value: !str?
+
+steps:
+  - return:
+      echo: "Parameters received successfully"
+      invocation-id: "${_run-id}"
+      flow-name: "${_flow-name}"
+      message: "${message}"
+      value: "${value}"

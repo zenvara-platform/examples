@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Invoice {{ invoice_number }}</title></head>
+<body>
+  <h1>Invoice for {{ customer.name }}</h1>
+  <p>Invoice #: {{ invoice_number | zero_pad: 6 }}</p>
+  <p>Date: {{ date | date_fmt: "yyyy-MM-dd" }}</p>
+  <table>
+    <thead><tr><th>Description</th><th>Qty</th><th>Unit price</th><th>Amount</th></tr></thead>
+    <tbody>
+    {% for line in orders %}
+      <tr>
+        <td>{{ line.description }}</td>
+        <td>{{ line.quantity }}</td>
+        <td>{{ line.unit_price }}</td>
+        <td>{{ line.amount }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p><strong>Total: {{ orders | sum: "amount" }}</strong></p>
+</body>
+</html>

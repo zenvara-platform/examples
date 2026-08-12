@@ -1,0 +1,20 @@
+# Connection: example-email
+# A typed connection to an SMTP server.
+
+type: zenvara/email
+kind: development
+status: active
+
+credentials:
+  serviceAccount: example-email
+  fields:
+    Password: password
+
+with:
+  # pin the discriminator explicitly rather than relying on the manifest
+  # default — the shape every connection should follow (see ConfigLoader.validateVariants).
+  Transport: smtp
+  Host: "smtp.example.com"
+  UserName: "notifications@example.com"
+  Port: 587
+  UseSsl: true

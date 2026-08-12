@@ -1,0 +1,82 @@
+status: active
+# ============================================================================
+# Akeneo Channable Export — Cache-served feed
+# ============================================================================
+# Cache-served flow: GET /serve returns the cached CSV instantly; SQS triggers,
+# cron, and warmup rebuild the cache. Manual POST .../flows/{name}/runs does NOT
+# clobber the cache (not in the default refresh-on set).
+#
+# Rebuild pipeline:
+# 1. Download the product export CSV from S3.
+# 2. Stream → dash-to-underscore rename → CSV batches.
+#
+# A deliberately simplified pipeline: it removed the `$enriched` (referenzen) and `$with-options`
+# (attribute_options) lookup-by joins. They produced 614 columns with
+# zero populated cells — the Akeneo export already emits locale-resolved
+# labels, so code→label enrichment had nothing to resolve. The bare flow
+# doesn't join verkn relationships (the DE / FR variants do); leaving it
+# as a straight locale-resolved product feed.
+# ============================================================================
+
+version: "1.0.0"
+
+using:
+  - environment/akeneo-channable-export
+  - zenvara/s3
+  - zenvara/filesystem
+
+output:
+  _mime-type: text/csv
+  # channable-feed-policy lives in the customer's own config repo, not
+  # in this sample — inlined here with its documented values so the
+  # flow validates standalone instead of dangling on an unresolvable named ref.
+  _cache:
+    ttl: 4h
+    grace-period: 12h
+    refresh-on: [trigger, schedule, warmup]
+    on-miss: rebuild
+  feed-csv: !str
+
+steps:
+  - $export-csv:
+      read: s3.object
+      with: { Bucket: "example-akeneo-bucket", Key: "export_channable_export.csv" }
+
+  - log: "Downloaded export CSV — ${export-csv.size} bytes"
+
+  - $export-data:
+      load: "${export-csv.path}"
+      format: csv
+      delimiter: ";"
+
+  - stream:
+      from: "${export-data.items}"
+      batch-size: 5000
+    after:
+      - $patched:
+          map: "${_batch.items}"
+          rename:
+            "/-/": "_"
+      # fused wildcard whole-cell coercion. The bare flow has
+      # no attrs-csv discovery; the inline literal table covers Akeneo's
+      # canonical yesno representation. Whole-cell match — bracketed
+      # reference codes never collide. Authors choose `1`/`0`; swap per
+      # flow if a different downstream wants a different convention.
+      - $boolified:
+          map: "${patched.items}"
+          apply:
+            "*":
+              "[yes]": "true"
+              "[no]":  "false"
+      - $batch-csv:
+          convert: "${boolified.items}"
+          to: csv
+          delimiter: ";"
+          no-headers: "${= _batch.index > 1}"
+    collect:
+      feed-csv: "${batch-csv.items}"
+
+  - log: "Output complete — ${= len(feed-csv)} chars of CSV"
+
+  - return:
+      feed-csv: "${feed-csv}"

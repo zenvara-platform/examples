@@ -1,0 +1,95 @@
+version: "1.0.0"
+description: |
+  Download master from a Bitbucket repository, build the Vite site, and sync
+  dist/ to the SFTP webspace (declarative sync, prunes stale files).
+
+  Trigger: runs on a Bitbucket post-receive webhook for push to
+  master. `auto-provision: true` lets the platform self-register the
+  webhook on flow save.
+
+triggers:
+  - name: on-master-push
+    type: git
+    auto-provision: true
+    project: TTI
+    repository: example-site
+    branch: master
+    events: [push]
+
+using:
+  - environment/website-deploy
+  - zenvara/build
+  - zenvara/filesystem
+  - zenvara/archive
+  - zenvara/sftp
+  - zenvara/http
+
+let:
+  remote-path: "/example-site.com"
+  site-url: "https://example-site.com"
+  bitbucket-username: "${secret:bitbucket/username}"
+  bitbucket-password: "${secret:bitbucket/password}"
+
+output:
+  uploaded: !int
+  updated: !int
+  deleted: !int
+  unchanged: !int
+  smoke-status: !int
+  app-path: !str
+
+steps:
+  - $download:
+      invoke: http.download
+      with:
+        Hosts:
+          - "https://bitbucket.example.com"
+        SourceLocation: "/rest/api/1.0/projects/TTI/repos/example-site/archive?at=master&format=zip&prefix=src"
+        FileExtension: "zip"
+        AuthType: Basic
+        AuthParams:
+          UserName: "${bitbucket-username}"
+          Password: "${bitbucket-password}"
+
+  - $extract:
+      invoke: archive.extract
+      with:
+        Path: "${download.path}"
+        Overwrite: true
+
+  - $build:
+      invoke: build.run
+      with:
+        Tool: node
+        Project: "${extract.path}"
+        Node:
+          Script: build
+          OutDir: "${extract.path}/dist"
+        Timeout: 900
+
+  - $deploy:
+      sync:
+        on: filesystem
+        entity: file
+        path: "${extract.path}/dist"
+      to:
+        on: sftp
+        entity: file
+        path: "${remote-path}"
+      delete: true
+
+  - $smoke:
+      invoke: http.get
+      with:
+        Hosts:
+          - "${site-url}"
+        Url: "/"
+        RaiseOnError: true
+
+  - return:
+      uploaded: "${deploy.uploaded}"
+      updated: "${deploy.updated}"
+      deleted: "${deploy.deleted}"
+      unchanged: "${deploy.unchanged}"
+      smoke-status: "${smoke.statusCode}"
+      app-path: "${extract.path}"

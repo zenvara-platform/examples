@@ -1,0 +1,4 @@
+title: "Example invoice report"
+description: "Sample HTML invoice template rendered by the render: flow step"
+format: html
+status: active

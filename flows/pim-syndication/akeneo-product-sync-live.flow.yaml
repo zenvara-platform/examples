@@ -1,0 +1,225 @@
+status: disabled
+# ============================================================================
+# Akeneo Product Sync (Live) — S3-Based Streaming Delta Sync
+# ============================================================================
+# Reads from LIVE Redshift, syncs to LIVE Akeneo. Disabled in this dev
+# environment because the Redshift connector may not be configured here;
+# flip to status: active when running in a proper prod deployment.
+#
+# Memory: O(batch_size) per batch. Per-item failure details land in
+# zenvara-staging/sync-failures/{flow}/{invocation}.jsonl on S3.
+#
+# Schedule: every hour at :25 and :55 (delta sync) + Sunday 03:15 UTC
+# (weekly-reload — full re-sync from scratch). Detection: trigger.name = 'weekly-reload'.
+#
+# concurrency: max: 1, on-conflict: skip — defense in depth + serializes
+# weekly-reload against regular ticks. Monitoring: pushes Zabbix metrics
+# at the end (template Example Zenvara, host example-zenvara).
+# ============================================================================
+
+version: "1.0.0"
+
+triggers:
+  - name: schedule
+    type: cron
+    expression: "25,55 * * * *"
+  - name: weekly-reload
+    type: cron
+    expression: "15 3 * * 0"
+    timezone: "UTC"
+
+concurrency:
+  max: 1
+  on-conflict: skip
+
+using:
+  - environment/akeneo-product-sync-live
+  - zenvara/redshift
+  - zenvara/s3
+  - zenvara/akeneo
+  - zenvara/filesystem
+  - zenvara/zabbix-sender
+
+persist:
+  catalog-hashes: !obj
+
+output:
+  status: !str
+  items-synced: !int
+  models:
+    created: !int
+    updated: !int
+    failed: !int
+  products:
+    created: !int
+    updated: !int
+    failed: !int
+  failures-uri: !str?
+
+steps:
+  - $reload-mode: "${= trigger IS NOT null AND trigger.name = 'weekly-reload'}"
+  - if: "reload-mode"
+    do:
+      - log: "WEEKLY RELOAD — ignoring existing catalog-hashes, forcing full re-sync this run"
+      - $baseline-hashes: !obj
+    else:
+      - $baseline-hashes: "${catalog-hashes}"
+
+  - $unload:
+      invoke: redshift.unload
+      with:
+        Query: "SELECT * FROM pim.akeneoproducts"
+        Destination: "s3://example-akeneo-bucket/zenvara-staging/akeneo-sync-live/export"
+        Format: CSV
+        WriteHeaders: true
+        Delimiter: ","
+        Timeout: 600
+
+  - log: "Unloaded live products to S3"
+
+  - $file:
+      read: s3.object
+      with:
+        Bucket: "example-akeneo-bucket"
+        Key: "zenvara-staging/akeneo-sync-live/export.000"
+
+  - log: "Downloaded CSV: ${file.size} bytes"
+
+  - stream:
+      from:
+        convert: "${file.path}"
+        from: csv
+        delimiter: ","
+        headers: true
+      batch-size: 5000
+    after:
+      - $delta:
+          delta: "${_batch.items}"
+          by: hash
+          key: "__identifier"
+          from: "${baseline-hashes}"
+
+      - log: "Batch ${_batch.index}: ${delta.stats.added} new, ${delta.stats.updated} changed, ${delta.stats.unchanged} unchanged"
+
+      - if: "len(delta.items) > 0"
+        do:
+          - $synced:
+              invoke: akeneo.sync-catalog
+              with:
+                Items: "${delta.items}"
+                AttributeGroup: "ag_erp_master_data"
+                DefaultLocale: "de_CH"
+                FamilyChangePolicy: recreate
+
+          - log: "Synced: models (${synced.models.created}/${synced.models.updated}/${synced.models.failed}), products (${synced.products.created}/${synced.products.updated}/${synced.products.failed}), options (${synced.options.created}/${synced.options.updated}/${synced.options.failed})"
+
+          - if: "synced.models.failed > 0 || synced.products.failed > 0"
+            do:
+              - $batch-failures-obj:
+                  batch: "${_batch.index}"
+                  models: "${synced.models.errors}"
+                  products: "${synced.products.errors}"
+              - $batch-failures-line: "${= toJson(batch-failures-obj)}"
+              - create: filesystem.file
+                with:
+                  Path: "E:/Zenvara/cache/${_flow-name}-${_run-id}-failures.jsonl"
+                  Content: "${batch-failures-line}\n"
+                  Append: true
+                rollback: none
+        else:
+          - $synced:
+              models:
+                created: 0
+                updated: 0
+                failed: 0
+              products:
+                created: 0
+                updated: 0
+                failed: 0
+
+    collect:
+      catalog-hashes: "${delta.hashes}"
+      items-synced: "${= len(delta.items)}"
+      models-created: "${synced.models.created}"
+      models-updated: "${synced.models.updated}"
+      models-failed: "${synced.models.failed}"
+      products-created: "${synced.products.created}"
+      products-updated: "${synced.products.updated}"
+      products-failed: "${synced.products.failed}"
+
+  - log: "Akeneo product sync complete: ${items-synced} items synced, ${models-failed} models failed, ${products-failed} products failed"
+
+  - if: "models-failed > 0 || products-failed > 0"
+    do:
+      - create: s3.object
+        with:
+          Bucket: "example-akeneo-bucket"
+          Key: "zenvara-staging/sync-failures/${_flow-name}/${_run-id}.jsonl"
+          Input: "E:/Zenvara/cache/${_flow-name}-${_run-id}-failures.jsonl"
+
+      - $failures-uri: "s3://example-akeneo-bucket/zenvara-staging/sync-failures/${_flow-name}/${_run-id}.jsonl"
+
+      - log: "Failure report uploaded to ${failures-uri}"
+    else:
+      - $failures-uri: ""
+
+  - $metrics-status:
+      invoke: zabbix-sender.send
+      with:
+        Host: "zabbix.example.com"
+        Port: 10051
+        SenderHost: "example-zenvara"
+        ItemKey: "akeneo.sync.status"
+        Data: "1"
+    retry:
+      max-attempts: 2
+      initial-delay-ms: 500
+
+  - $metrics-processed:
+      invoke: zabbix-sender.send
+      with:
+        Host: "zabbix.example.com"
+        Port: 10051
+        SenderHost: "example-zenvara"
+        ItemKey: "akeneo.sync.products_processed"
+        Data: "${items-synced}"
+    retry:
+      max-attempts: 2
+      initial-delay-ms: 500
+
+  - $metrics-updated:
+      invoke: zabbix-sender.send
+      with:
+        Host: "zabbix.example.com"
+        Port: 10051
+        SenderHost: "example-zenvara"
+        ItemKey: "akeneo.sync.products_updated"
+        Data: "${= products-created + products-updated}"
+    retry:
+      max-attempts: 2
+      initial-delay-ms: 500
+
+  - $metrics-failures:
+      invoke: zabbix-sender.send
+      with:
+        Host: "zabbix.example.com"
+        Port: 10051
+        SenderHost: "example-zenvara"
+        ItemKey: "akeneo.sync.failures"
+        Data: "${= products-failed + models-failed}"
+    retry:
+      max-attempts: 2
+      initial-delay-ms: 500
+
+  - return:
+      status: "completed"
+      items-synced: "${items-synced}"
+      models:
+        created: "${models-created}"
+        updated: "${models-updated}"
+        failed: "${models-failed}"
+      products:
+        created: "${products-created}"
+        updated: "${products-updated}"
+        failed: "${products-failed}"
+      failures-uri: "${failures-uri}"

@@ -1,0 +1,9 @@
+{
+  "invoice_number": "42",
+  "date": "2026-05-21T00:00:00Z",
+  "customer": { "name": "Globex Corporation" },
+  "orders": [
+    { "description": "Consulting", "quantity": 10, "unit_price": 150, "amount": 1500 },
+    { "description": "Support",    "quantity": 1,  "unit_price": 500, "amount": 500 }
+  ]
+}

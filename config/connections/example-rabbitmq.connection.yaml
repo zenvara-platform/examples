@@ -1,0 +1,20 @@
+# Connection: example-rabbitmq
+# A typed connection to a RabbitMQ broker (AMQP 0-9-1).
+
+type: zenvara/rabbitmq
+kind: development
+status: active
+
+credentials:
+  serviceAccount: example-rabbitmq
+  fields:
+    Password: password
+
+with:
+  HostName: "localhost"
+  Port: 5672
+  VirtualHost: "/"
+  Username: "guest"
+  UseSsl: false
+  ManagementPort: 15672
+  ManagementScheme: http

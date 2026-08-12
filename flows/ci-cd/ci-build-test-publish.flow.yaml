@@ -1,0 +1,81 @@
+version: "1.0.0"
+description: |
+  Full CI/CD pipeline in a single flow: compile a project, run its test suite,
+  and publish a deployable artifact only when the build is green. Demonstrates
+  build.run -> build.test -> build.publish with success gating at each stage,
+  proving the build connector covers the build + test + package lifecycle.
+
+  Tool is dotnet (self-contained publish into `artifact-dir`); swap Tool + the
+  per-tool options block for node/maven. Pass the project/solution as `Project`.
+using:
+  - zenvara/build
+input:
+  Project: !str
+let:
+  configuration: "Release"
+  artifact-dir: "/artifacts/ci-publish"
+output:
+  built: !bool
+  tested: !bool
+  published: !bool
+  outcome: !str
+  total-tests: !int
+  passed: !int
+  failed: !int
+steps:
+  - $build:
+      invoke: build.run
+      with:
+        Tool: dotnet
+        Project: "${Project}"
+        Dotnet:
+          Configuration: "${configuration}"
+        Verbosity: quiet
+  - if: "build.success"
+    do:
+      - $test:
+          invoke: build.test
+          with:
+            Tool: dotnet
+            Project: "${Project}"
+            Dotnet:
+              Configuration: "${configuration}"
+              NoBuild: true
+            Verbosity: quiet
+      - if: "test.success"
+        do:
+          - $publish:
+              invoke: build.publish
+              with:
+                Tool: dotnet
+                Project: "${Project}"
+                Dotnet:
+                  Configuration: "${configuration}"
+                  OutputDirectory: "${artifact-dir}"
+                Verbosity: quiet
+          - return:
+              built: true
+              tested: true
+              published: "${publish.success}"
+              outcome: "${= publish.success ? 'published' : 'publish-failed'}"
+              total-tests: "${test.totalTests}"
+              passed: "${test.passed}"
+              failed: "${test.failed}"
+        else:
+          - return:
+              built: true
+              tested: true
+              published: false
+              outcome: "tests-failed"
+              total-tests: "${test.totalTests}"
+              passed: "${test.passed}"
+              failed: "${test.failed}"
+    else:
+      - return:
+          built: false
+          tested: false
+          published: false
+          outcome: "build-failed"
+          total-tests: 0
+          passed: 0
+          failed: 0

@@ -1,0 +1,123 @@
+status: active
+# Index Repo Docs Flow (Vara RAG — incremental sync)
+# Recursively lists a Git repository's file tree, keeps the markdown files, and indexes
+# them into the semantic vector store so the repo's docs are retrievable via
+# knowledge.retrieve / knowledge:///search.
+#
+# INCREMENTAL: re-running only re-fetches + re-embeds files whose per-blob
+# SHA changed, skips unchanged files entirely, and prunes files deleted at the origin —
+# driven by knowledge.plan-sync (diff) + knowledge.index (apply) + knowledge.forget
+# (prune). The reconcile engine is source-agnostic; the same shape backs
+# index-confluence-space (keyed on page version.number instead of a blob SHA).
+#
+# This flow targets GitHub (github.list-tree + github.get-file). The Bitbucket
+# equivalent is a drop-in swap: bind a `zenvara/bitbucket` connection and use
+# `bitbucket.list-tree` (project/repoSlug/at) + the existing `bitbucket.get-file`
+# (whose content lands in `data` rather than `content`).
+#
+# The bound environment must provide a `zenvara/github` connection AND an embedding
+# (zenvara/knowledge) connection, e.g. `ai-vector-default`. The GitHub token needs
+# read access to the repository.
+#
+# Invoke (the environment selects both connections):
+#   run-flow(name="index-repo-docs", parameters={"Owner":"octocat","Repo":"Hello-World","Ref":"main"})
+#
+# Parameters:
+#   Owner      - repository owner (user or org)
+#   Repo       - repository name
+#   Ref        - branch, tag, or commit/tree SHA to index (default: HEAD)
+#   Pattern    - .NET regex matched against each path (default: markdown files)
+#   Collection - vector collection to index into (default: "repo")
+
+input:
+  Owner: !str                          # Repository owner (user or org)
+  Repo: !str                           # Repository name
+  Ref: !str HEAD                       # Branch, tag, or commit/tree SHA
+  Pattern: !str ".*\\.(md|markdown)$"  # .NET regex over the path (NOT a glob)
+  Collection: !str repo                # Target vector collection
+
+using:
+  - zenvara/github
+  - zenvara/knowledge
+
+output:
+  status: !str
+  indexed: !str
+  repository: !str
+
+steps:
+  # 1. List the repo tree CHEAPLY — each entry carries its path + blob SHA (a strong
+  #    per-file content hash) + web URL. No file bodies are fetched here.
+  - $tree:
+      invoke: github.list-tree
+      with:
+        owner: "${Owner}"
+        repo: "${Repo}"
+        ref: "${Ref}"
+        pattern: "${Pattern}"
+
+  # 2. Project the tree into the cheap { SourceId, Version } manifest — path is the
+  #    stable id and the per-blob SHA is the change signal. This supersedes an earlier
+  #    coarse shared `tree.ref`, which changed on EVERY commit and so
+  #    re-embedded every file each run; the blob SHA only changes when the file changes.
+  - $manifest:
+      map: "${tree.entries}"
+      rename:
+        path: SourceId
+        sha: Version
+      fields: [SourceId, Version]
+
+  # 3. Plan the incremental sync: diff the manifest against what is already indexed.
+  #    Returns only the new/changed files (toIndex) and the deleted ones (toDelete).
+  - $plan:
+      invoke: knowledge.plan-sync
+      with:
+        Collection: "${Collection}"
+        SourceSystem: "github"
+        Manifest: "${manifest.items}"
+
+  - log: "index-repo-docs: ${= len(plan.toIndex)} new/changed, ${= len(plan.toDelete)} deleted (of ${= len(tree.entries)} file(s)) in ${Owner}/${Repo}@${tree.ref}"
+
+  # 4. Fetch + (re)index ONLY the new/changed files — unchanged files are never
+  #    re-fetched or re-embedded (the incremental win). Stamp the plan's `version`
+  #    token as `Version` so the next run's plan skips this file while unchanged.
+  - for-each: $item in "${plan.toIndex}"
+    do:
+      - $file:
+          invoke: github.get-file
+          with:
+            owner: "${Owner}"
+            repo: "${Repo}"
+            path: "${item.sourceId}"
+            ref: "${Ref}"
+
+      - $index:
+          invoke: knowledge.index
+          with:
+            Content: "${file.content}"
+            Collection: "${Collection}"
+            SourceSystem: "github"
+            SourceId: "${item.sourceId}"
+            Version: "${item.version}"
+            SourceUri: "https://github.com/${Owner}/${Repo}/blob/${Ref}/${item.sourceId}"
+            Title: "${item.sourceId}"
+            IsMarkdown: true
+
+      - log: "index-repo-docs: indexed ${item.sourceId} (${index.chunksIndexed} chunk(s))"
+
+  # 5. Prune files that were DELETED at the origin (indexed before, absent now).
+  - for-each: $del in "${plan.toDelete}"
+    do:
+      - $forget:
+          invoke: knowledge.forget
+          with:
+            Collection: "${Collection}"
+            SourceSystem: "github"
+            SourceId: "${del.sourceId}"
+
+      - log: "index-repo-docs: forgot ${del.sourceId} (deleted at origin)"
+
+  - return:
+      status: "completed"
+      indexed: "${= len(plan.toIndex)}"
+      repository: "${Owner}/${Repo}"

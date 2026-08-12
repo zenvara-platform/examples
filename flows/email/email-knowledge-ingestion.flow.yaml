@@ -1,0 +1,73 @@
+status: active
+# Email Knowledge Ingestion Flow (Annotate)
+# Fetches unread emails matching filter criteria, summarizes each with Claude,
+# and stores the extracted knowledge in flow state for later retrieval.
+#
+# Brand concept: "Annotate" (Vara) — structured knowledge capture from email.
+#
+# Designed to be triggered by a mail trigger:
+#   triggers:
+#     - source: mail
+#       flow: email-knowledge-ingestion
+#       settings:
+#         environment: mail-prod
+#         from: "*@team.example.com"
+#         subject: "KB:*"
+#
+# Can also be invoked manually:
+#   run-flow(name="email-knowledge-ingestion")
+
+input:
+  Folder: !str INBOX             # IMAP folder to fetch from
+  MaxMessages: !str 10           # Max emails to process per run
+  SubjectFilter: !str?           # Only process matching subjects
+
+using:
+  - zenvara/imap
+  - zenvara/ai
+
+persist:
+  knowledge-entries: !obj
+
+output:
+  status: !str
+  processed: !str
+  folder: !str
+
+steps:
+  # Fetch unread emails from the configured mailbox
+  - $fetch:
+      invoke: imap.fetch
+      with:
+        Folder: "${Folder}"
+        UnreadOnly: true
+        MaxMessages: "${MaxMessages}"
+        MarkAsRead: true
+        IncludeBody: true
+
+  - log: "Fetched ${= len(fetch.messages)} email(s) for knowledge ingestion"
+
+  # Process each email through the configured AI provider for summarisation.
+  - for-each: $mail in "${fetch.messages}"
+    do:
+      - $summarize:
+          invoke: ai.call
+          with:
+            SystemPrompt: |
+              You are a knowledge extraction assistant. Given an email, produce a structured
+              JSON summary with these fields:
+              - "topic": a short topic label (3-5 words)
+              - "summary": a 2-3 sentence summary of the key information
+              - "tags": an array of relevant tags (lowercase, no spaces)
+              - "actionItems": an array of action items if any, otherwise empty array
+              - "source": the sender's email address
+              Respond ONLY with valid JSON, no markdown fences.
+            Prompt: "Subject: ${mail.subject}\nFrom: ${mail.from}\nDate: ${mail.date}\n\n${mail.body}"
+
+      - log: "Ingested knowledge from: ${mail.subject}"
+
+  # Set output with processing summary
+  - return:
+      status: "completed"
+      processed: "${= len(fetch.messages)}"
+      folder: "${Folder}"

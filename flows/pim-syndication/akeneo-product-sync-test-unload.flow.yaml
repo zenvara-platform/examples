@@ -1,0 +1,98 @@
+version: "1.0.0"
+
+using:
+  - environment/akeneo-product-sync-test
+  - zenvara/redshift
+  - zenvara/s3
+  - zenvara/akeneo
+
+persist:
+  catalog-hashes: !obj
+
+output:
+  status: !str
+  items-synced: !int
+  models:
+    created: !int
+    updated: !int
+    failed: !int
+  products:
+    created: !int
+    updated: !int
+    failed: !int
+
+steps:
+  # ─── Unload full dataset to S3 as CSV ───────────────────────────
+  - $unload:
+      invoke: redshift.unload
+      with:
+        Query: "SELECT * FROM pim.akeneoproducts"
+        Destination: "s3://example-akeneo-bucket/zenvara-staging/akeneo-sync/export"
+        Format: CSV
+        WriteHeaders: true
+        Delimiter: ","
+        Timeout: 600
+
+  - log: "Unloaded products to S3"
+
+  # ─── Download CSV from S3 (UNLOAD appends .000 suffix) ──────────
+  - $file:
+      read: s3.object
+      with:
+        Bucket: "example-akeneo-bucket"
+        Key: "zenvara-staging/akeneo-sync/export.000"
+
+  - log: "Downloaded CSV: ${file.size} bytes"
+
+  # ─── Stream CSV in batches — delta + sync ───────────────────────
+  - stream:
+      from:
+        convert: "${file.path}"
+        from: csv
+        delimiter: ","
+        headers: true
+      batch-size: 5000
+    after:
+      - $delta:
+          delta: "${_batch.items}"
+          by: hash
+          key: "__identifier"
+          from: "${catalog-hashes}"
+
+      - log: "Batch ${_batch.index}: ${delta.stats.added} new, ${delta.stats.updated} changed, ${delta.stats.unchanged} unchanged"
+
+      - if: "len(delta.items) > 0"
+        do:
+          - $synced:
+              invoke: akeneo.sync-catalog
+              with:
+                Items: "${delta.items}"
+                AttributeGroup: "ag_erp_master_data"
+                DefaultLocale: "de_CH"
+                FamilyChangePolicy: recreate
+
+          - log: "Synced: models (${synced.models.created}/${synced.models.updated}/${synced.models.failed}), products (${synced.products.created}/${synced.products.updated}/${synced.products.failed}), options (${synced.options.created}/${synced.options.updated}/${synced.options.failed})"
+
+    collect:
+      catalog-hashes: "${delta.hashes}"
+      items-synced: "${= len(delta.items)}"
+      models-created: "${synced.models.created}"
+      models-updated: "${synced.models.updated}"
+      models-failed: "${synced.models.failed}"
+      products-created: "${synced.products.created}"
+      products-updated: "${synced.products.updated}"
+      products-failed: "${synced.products.failed}"
+
+  - log: "Akeneo product sync complete: ${items-synced} items synced"
+
+  - return:
+      status: "completed"
+      items-synced: "${items-synced}"
+      models:
+        created: "${models-created}"
+        updated: "${models-updated}"
+        failed: "${models-failed}"
+      products:
+        created: "${products-created}"
+        updated: "${products-updated}"
+        failed: "${products-failed}"

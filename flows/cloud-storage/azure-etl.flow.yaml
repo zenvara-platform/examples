@@ -1,0 +1,64 @@
+description: Azure ETL round-trip through the run cache — stage a CSV, upload to Azure, download it back, convert csv→json, upload the json, verify. Proves the download(filepath)→read→convert→upload cache-path handoff for the azure-blob-storage connector.
+using:
+  - environment/cloud-showcase
+  - zenvara/filesystem as filesystem
+  - zenvara/azure-blob-storage as azure-blob-storage
+output:
+  json-head: !obj
+  row-count: !int
+steps:
+  - $seed:
+      create: filesystem.file
+      with:
+        Path: "showcase/etl-src.csv"
+        Content: "id,name,score\n1,alice,90\n2,bob,75\n3,carol,88"
+
+  - $up:
+      create: azure-blob-storage.object
+      with:
+        Container: "example-container"
+        Key: "showcase/etl-src.csv"
+        Input: "${seed.path}"
+    on: "az"
+
+  - $down:
+      read: azure-blob-storage.object
+      with:
+        Container: "example-container"
+        Key: "showcase/etl-src.csv"
+    on: "az"
+
+  - $rd:
+      read: filesystem.file
+      with:
+        Path: "${down.path}"
+
+  - $asjson:
+      convert: "${rd.content}"
+      from: csv
+      to: json
+
+  - $jsonfile:
+      create: filesystem.file
+      with:
+        Path: "showcase/etl-out.json"
+        Content: "${asjson}"
+
+  - $upjson:
+      create: azure-blob-storage.object
+      with:
+        Container: "example-container"
+        Key: "showcase/etl-out.json"
+        Input: "${jsonfile.path}"
+    on: "az"
+
+  - $verify:
+      invoke: azure-blob-storage.head-object
+      with:
+        Container: "example-container"
+        Key: "showcase/etl-out.json"
+    on: "az"
+
+  - return:
+      json-head: "${verify.data}"
+      row-count: "${= len(asjson.items)}"

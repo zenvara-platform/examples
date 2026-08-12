@@ -1,0 +1,70 @@
+description: GCS object lifecycle — stage a file, upload to a bucket, confirm it exists, server-side copy, then clean up. Proves the gcs connector's core happy-path against Google Cloud Storage.
+using:
+  - environment/cloud-showcase
+  - zenvara/filesystem as filesystem
+  - zenvara/gcs as gcs
+output:
+  staged: !str
+  exists-after-upload: !bool
+  copy-status: !str
+  exists-copy-dst: !bool
+  delete-up-resp: !str
+  delete-copy-resp: !str
+steps:
+  - $save:
+      create: filesystem.file
+      with:
+        Path: "showcase-stage.txt"
+        Content: "gcs showcase roundtrip payload"
+
+  - $upload:
+      create: gcs.object
+      with:
+        Bucket: "example-bucket"
+        Key: "showcase/up.txt"
+        Input: "${save.path}"
+    on: "gcs"
+
+  - $exists-up:
+      invoke: gcs.exists
+      with:
+        Bucket: "example-bucket"
+        Key: "showcase/up.txt"
+    on: "gcs"
+
+  - $copy:
+      invoke: gcs.copy
+      with:
+        Bucket: "example-bucket"
+        Key: "showcase/up.txt"
+        DestKey: "showcase/copy.txt"
+    on: "gcs"
+
+  - $exists-copy:
+      invoke: gcs.exists
+      with:
+        Bucket: "example-bucket"
+        Key: "showcase/copy.txt"
+    on: "gcs"
+
+  - $del-up:
+      delete: gcs.object
+      with:
+        Bucket: "example-bucket"
+        Key: "showcase/up.txt"
+    on: "gcs"
+
+  - $del-copy:
+      delete: gcs.object
+      with:
+        Bucket: "example-bucket"
+        Key: "showcase/copy.txt"
+    on: "gcs"
+
+  - return:
+      staged: "${save.path}"
+      exists-after-upload: "${exists-up.exists}"
+      copy-status: "${copy.status}"
+      exists-copy-dst: "${exists-copy.exists}"
+      delete-up-resp: "${del-up.response}"
+      delete-copy-resp: "${del-copy.response}"

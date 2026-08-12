@@ -1,0 +1,115 @@
+status: active
+version: "1.0.0"
+description: |
+  Computes the company annual business analysis — sevDESK invoices /
+  vouchers / bank transactions + Jira worklogs (live, no manual Tempo export)
+  → precise per-project Deckungsbeitrag + aggregate sevDESK extraction →
+  markdown report.
+
+  Year-agnostic on the hours side (Jira worklogs are queried per Year input).
+  The DB revenue side uses curated per-customer figures — see
+  the v1 caveat in business-analysis-builder/main.py.
+
+  Overflow handling for issues with >20 worklogs lives in the script (direct
+  Jira REST call) — the flow-side for-each leaks ~80MB per iteration in the
+  current runtime and OOM'd at ~98 iterations.
+
+
+using:
+  - environment/sevdesk
+  - sevdesk/sevdesk
+  - zenvara/jira
+  - zenvara/filesystem
+  - business-analysis-builder
+
+vars:
+  invoices: !obj-list
+  vouchers: !obj-list
+  transactions: !obj-list
+  issues: !obj-list
+
+input:
+  Year: !str? "2025"
+  OutputDir: !str? "./output"
+
+output:
+  path: !str
+  revenue: !float
+  total-hours: !float
+  deckungsbeitrag: !float
+
+steps:
+  - $fetch-invoices:
+      stream:
+        from:
+          invoke: sevdesk.get-invoices
+          on: sevdesk
+          result-path: data.objects
+        batch-size: 100
+      after:
+        - $bi: "${_batch.items}"
+      collect:
+        invoices: "${bi}"
+
+  - $fetch-vouchers:
+      stream:
+        from:
+          invoke: sevdesk.get-vouchers
+          on: sevdesk
+          result-path: data.objects
+        batch-size: 100
+      after:
+        - $bv: "${_batch.items}"
+      collect:
+        vouchers: "${bv}"
+
+  - $fetch-transactions:
+      stream:
+        from:
+          invoke: sevdesk.get-transactions
+          on: sevdesk
+          result-path: data.objects
+        batch-size: 100
+      after:
+        - $bt: "${_batch.items}"
+      collect:
+        transactions: "${bt}"
+
+  - $fetch-worklogs:
+      stream:
+        from:
+          list: jira.issue
+          on: jira
+          with:
+            jql: "worklogDate >= '${Year}-01-01' AND worklogDate <= '${Year}-12-31'"
+            Expand: "worklog"
+            Fields: "worklog,components,project"
+        batch-size: 50
+      after:
+        - $bj: "${_batch.items}"
+      collect:
+        issues: "${bj}"
+
+  - $build:
+      invoke: business-analysis-builder.render
+      with:
+        Invoices: "${invoices}"
+        Vouchers: "${vouchers}"
+        Transactions: "${transactions}"
+        JiraIssues: "${issues}"
+        Year: "${Year}"
+        OutputDir: "${OutputDir}"
+
+  - $write:
+      create: filesystem.file
+      with:
+        Path: "${build.data.outputPath}"
+        Content: "${build.data.markdown}"
+
+  - log: "Annual analysis ${Year} - DB ${build.data.deckungsbeitrag}"
+
+  - return:
+      path: "${write.path}"
+      revenue: "${build.data.revenue}"
+      total-hours: "${build.data.totalHours}"
+      deckungsbeitrag: "${build.data.deckungsbeitrag}"

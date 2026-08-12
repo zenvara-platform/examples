@@ -1,0 +1,24 @@
+# Connection: example-mssql
+# A typed connection to a MS-SQL database.
+# Connections are the atomic config unit — one per external service.
+
+type: zenvara/mssql
+status: active
+kind: development
+
+credentials:
+  serviceAccount: example-mssql
+  fields:
+    Password: password
+
+with:
+  Server: "localhost"
+  Database: "master"
+  UserName: "sa"
+  Port: 1433
+  # the mssql connector default flipped to TrustServerCertificate=false
+  # (secure-by-default). This example dev connection targets a local SQL Server
+  # container with a self-signed cert, so it explicitly opts back into trusting
+  # it — a real deployment should either install a valid cert or leave this at
+  # the connector default (false).
+  TrustServerCertificate: true
