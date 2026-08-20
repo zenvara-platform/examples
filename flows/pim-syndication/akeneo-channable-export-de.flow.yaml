@@ -42,8 +42,11 @@ triggers:
     queue-url: "https://sqs.eu-central-1.amazonaws.com/123456789012/example-s3-events"
     region: eu-central-1
     ack-on: receive
-    debounce: 300000
-    filter: "message.Records[0].s3.object.key = 'export_channable_export_de.csv'"
+    # `bodyJson` is the parse of the OUTER SQS message body on every path — the
+    # right root whether or not the message arrived wrapped. This queue is
+    # subscribed to S3 event notifications DIRECTLY; behind an SNS→SQS hop the
+    # S3 records would instead live under `snsBodyJson`.
+    filter: "bodyJson.Records[0].s3.object.key = 'export_channable_export_de.csv'"
 
 concurrency:
   max: 1

@@ -33,7 +33,7 @@ steps:
     on: "gcs"
 
   - $copy:
-      invoke: gcs.copy
+      command: gcs.object.copy
       with:
         Bucket: "example-bucket"
         Key: "showcase/up.txt"

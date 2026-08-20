@@ -33,7 +33,7 @@ steps:
       with:
         Url: "http://127.0.0.1:5000/health"      # source: pull the batch
         Hosts:
-          - 127.0.0.1
+          - http://127.0.0.1
       retry:
         max-attempts: 3
       timeout: 10s
@@ -44,7 +44,7 @@ steps:
       with:
         Url: "http://127.0.0.1:5000/health"      # warehouse: load the result
         Hosts:
-          - 127.0.0.1
+          - http://127.0.0.1
       timeout: 10s
   - return:
       loaded: "ingest-complete"

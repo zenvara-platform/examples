@@ -8,7 +8,7 @@ description: |
   webhook on flow save.
 
 triggers:
-  - name: on-master-push
+  - name: on-push
     type: git
     auto-provision: true
     project: TTI
@@ -23,6 +23,14 @@ using:
   - zenvara/archive
   - zenvara/sftp
   - zenvara/http
+
+# Two rapid pushes to master must not run two SFTP syncs racing on dist/.
+# `queue` rather than the default `skip` because a deploy is not a delta sync:
+# skipping the second push would leave the site on the older commit, whereas
+# queueing makes the LAST push the one that lands.
+concurrency:
+  max: 1
+  on-conflict: queue
 
 let:
   remote-path: "/example-site.com"
@@ -69,11 +77,11 @@ steps:
 
   - $deploy:
       sync:
-        on: filesystem
+        using: filesystem
         entity: file
         path: "${extract.path}/dist"
       to:
-        on: sftp
+        using: sftp
         entity: file
         path: "${remote-path}"
       delete: true

@@ -12,7 +12,7 @@ steps:
       with:
         Url: "http://127.0.0.1:5000/health"
         Hosts:
-          - 127.0.0.1
+          - http://127.0.0.1
       timeout: 10s
   - return:
       enriched: "records-enriched"

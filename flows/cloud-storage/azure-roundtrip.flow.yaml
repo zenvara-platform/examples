@@ -50,7 +50,7 @@ steps:
     on: "az"
 
   - $copied:
-      invoke: azure-blob-storage.copy
+      command: azure-blob-storage.object.copy
       with:
         Container: "example-container"
         Key: "showcase/up.txt"
@@ -58,7 +58,7 @@ steps:
     on: "az"
 
   - $moved:
-      invoke: azure-blob-storage.move
+      command: azure-blob-storage.object.move
       with:
         Container: "example-container"
         Key: "showcase/copy.txt"

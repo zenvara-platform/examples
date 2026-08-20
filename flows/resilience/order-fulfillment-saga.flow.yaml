@@ -25,7 +25,7 @@ steps:
       with:
         Url: "http://127.0.0.1:5000/health"      # ERP: reserve stock
         Hosts:
-          - 127.0.0.1
+          - http://127.0.0.1
       retry:
         max-attempts: 3
       timeout: 10s
@@ -34,7 +34,7 @@ steps:
       with:
         Url: "http://127.0.0.1:5000/health"      # ERP: release the reservation
         Hosts:
-          - 127.0.0.1
+          - http://127.0.0.1
 
   # 2) Charge payment. Compensate = refund.
   - $charge-payment:
@@ -42,7 +42,7 @@ steps:
       with:
         Url: "http://127.0.0.1:5000/health"      # PSP: capture payment
         Hosts:
-          - 127.0.0.1
+          - http://127.0.0.1
       retry:
         max-attempts: 3
       timeout: 10s
@@ -51,7 +51,7 @@ steps:
       with:
         Url: "http://127.0.0.1:5000/health"      # PSP: refund the charge
         Hosts:
-          - 127.0.0.1
+          - http://127.0.0.1
 
   # 3) Create shipment. Demo: carrier is unreachable → the saga rolls back
   #    (refund payment, then release inventory) in LIFO order.
@@ -60,7 +60,7 @@ steps:
       with:
         Url: "http://127.0.0.1:12345/carrier/ship"
         Hosts:
-          - 127.0.0.1
+          - http://127.0.0.1
       timeout: 5s
 
   - return:

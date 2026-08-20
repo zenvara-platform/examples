@@ -25,6 +25,13 @@ using:
   - zenvara/s3
   - zenvara/filesystem
 
+# Stated explicitly rather than inherited from the default. This flow is rebuilt
+# by SQS triggers, cron AND the cache warmup, so overlap is genuinely reachable,
+# and the -de / -fr / -live siblings all declare the same block.
+concurrency:
+  max: 1
+  on-conflict: skip
+
 output:
   _mime-type: text/csv
   # channable-feed-policy lives in the customer's own config repo, not
