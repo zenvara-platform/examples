@@ -36,7 +36,7 @@ output:
 steps:
   # Recursively list matching files under the sandboxed directory.
   - $listing:
-      invoke: filesystem.list-dir
+      list: filesystem.file
       with:
         Directory: "${Directory}"
         Filter:

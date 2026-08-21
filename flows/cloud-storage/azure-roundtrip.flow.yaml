@@ -29,21 +29,21 @@ steps:
     on: "az"
 
   - $exists-up:
-      invoke: azure-blob-storage.exists
+      command: azure-blob-storage.object.exists
       with:
         Container: "example-container"
         Key: "showcase/up.txt"
     on: "az"
 
   - $head:
-      invoke: azure-blob-storage.head-object
+      command: azure-blob-storage.object.head
       with:
         Container: "example-container"
         Key: "showcase/up.txt"
     on: "az"
 
   - $listed:
-      invoke: azure-blob-storage.list-objects
+      list: azure-blob-storage.object
       with:
         Container: "example-container"
         Prefix: "showcase/"
@@ -67,14 +67,14 @@ steps:
     on: "az"
 
   - $exists-src:
-      invoke: azure-blob-storage.exists
+      command: azure-blob-storage.object.exists
       with:
         Container: "example-container"
         Key: "showcase/copy.txt"
     on: "az"
 
   - $exists-dest:
-      invoke: azure-blob-storage.exists
+      command: azure-blob-storage.object.exists
       with:
         Container: "example-archive"
         Key: "showcase/moved.txt"

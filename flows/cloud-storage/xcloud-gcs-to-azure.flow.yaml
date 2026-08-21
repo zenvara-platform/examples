@@ -23,7 +23,7 @@ steps:
     on: "az"
 
   - $verify:
-      invoke: azure-blob-storage.head-object
+      command: azure-blob-storage.object.head
       with:
         Container: "example-archive"
         Key: "showcase/from-gcs-seed.csv"

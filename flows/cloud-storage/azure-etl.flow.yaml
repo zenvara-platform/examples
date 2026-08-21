@@ -53,7 +53,7 @@ steps:
     on: "az"
 
   - $verify:
-      invoke: azure-blob-storage.head-object
+      command: azure-blob-storage.object.head
       with:
         Container: "example-container"
         Key: "showcase/etl-out.json"

@@ -37,7 +37,7 @@ output:
 steps:
   # Fetch unread emails from the configured mailbox
   - $fetch:
-      invoke: imap.fetch
+      list: imap.email
       with:
         Folder: "${Folder}"
         UnreadOnly: true

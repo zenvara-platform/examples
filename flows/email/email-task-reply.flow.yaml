@@ -34,7 +34,7 @@ output:
 steps:
   # Fetch unread emails that look like task replies
   - $fetch:
-      invoke: imap.fetch
+      list: imap.email
       with:
         Folder: "${Folder}"
         UnreadOnly: true
