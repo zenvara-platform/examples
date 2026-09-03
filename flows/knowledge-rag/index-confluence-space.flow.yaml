@@ -90,12 +90,12 @@ steps:
       - $index:
           invoke: knowledge.index
           with:
-            Content: "${one[0].content.body.storage.value}"
+            Content: "${one.data[0].content.body.storage.value}"
             Collection: "${Collection}"
             SourceSystem: "confluence"
             SourceId: "${item.sourceId}"
             Version: "${item.version}"
-            Title: "${one[0].content.title}"
+            Title: "${one.data[0].content.title}"
             Format: html
 
       - log: "index-confluence-space: indexed ${item.sourceId} (${index.chunksIndexed} chunk(s))"
