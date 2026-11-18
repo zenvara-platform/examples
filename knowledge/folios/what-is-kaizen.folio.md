@@ -1,3 +1,9 @@
+---
+type: note
+title: "What is the kaizen cycle?"
+status: stable
+---
+
 # What is the kaizen cycle?
 
 Zenvara takes its name from two roots. **Zen** (禅): to see clearly, without clutter — things as they actually are. **Vara**: the measured standard, the measuring rod. Together: *clarity through truth.* The **kaizen cycle** is that same idea turned on the way you work — see the real situation clearly, measure it honestly, and improve it one small step at a time.
