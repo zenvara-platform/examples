@@ -25,8 +25,7 @@ samples/
     knowledge-rag/         retrieval-augmented-generation ingest flows (repo docs,
                            Confluence, Jira, local folders)
   knowledge/
-    folios/                knowledge-base entities (title + document.md)
-    folio-documents/       the folio bodies
+    folios/                knowledge-base concepts (one .folio.md: frontmatter + body)
     skills/                guided-methodology entities (the kaizen-cycle PDCA skill)
     templates/              Liquid report templates
   config/
@@ -34,14 +33,34 @@ samples/
     connections/             one-per-backend typed connection definitions
 ```
 
-Each entity is a pair: `<name>.<kind>.yaml` (the definition) + `<name>.context.md`
-(what it shows, in plain language) sitting right beside it.
+Each entity is a pair: the definition + `<name>.context.md` (what it shows, in plain
+language) sitting right beside it. For flows, templates, skills, environments, and
+connections the definition is `<name>.<kind>.yaml`. Folios are the one exception:
+a folio is a single `<name>.folio.md` that carries its metadata as YAML frontmatter
+followed by the Markdown body.
+
+```yaml
+---
+type: note
+title: "What is a folio?"
+status: stable
+---
+
+# What is a folio?
+
+...the document body follows the closing `---`.
+```
+
+The `.context.md` sidecar is optional for your own entities — the ones here all have
+one because this is a sample set meant to be read.
 
 ## How to use these
 
 - **Browse.** Every `.context.md` is written to be read standalone.
 - **Load into a live instance.** Point git-backed storage at a clone of this repo,
-  or load individual files with `create-entity … content=<yaml>`.
+  or load individual files with `create-entity … content=<definition>` — passing the
+  YAML for a flow, template, skill, environment, or connection, and the whole
+  `.folio.md` file (frontmatter included) for a folio.
 - **Run one.** `demo-report` needs zero configuration — clone, point Zenvara's
   storage at it, and run `run-flow(name="demo-report")` for an immediate result.
   Most others need a bound environment/connection (see each flow's `.context.md`

@@ -1,3 +1,9 @@
+---
+type: note
+title: "What is a folio?"
+status: stable
+---
+
 # What is a folio?
 
 A **folio** is a piece of living documentation that lives inside Zenvara's library alongside your flows, connections, and environments. This page is itself a folio — you are reading one right now.
@@ -6,21 +12,24 @@ Folios are meant for the kind of knowledge that a team keeps rewriting in chat, 
 
 ## What goes inside
 
-A folio is just a Markdown document with a short definition file beside it:
+A folio is a single Markdown file: a short YAML frontmatter block for the metadata, then the document you are reading.
 
 ```
-knowledge/folios/{name}.folio.yaml       # metadata — title, status
-knowledge/folio-documents/{name}.md      # the content you are reading
+knowledge/folios/{name}.folio.md         # frontmatter + body, one file
+knowledge/folios/{name}.context.md       # optional sidecar — what it demonstrates
 ```
 
-The `{name}.folio.yaml` is tiny:
+The frontmatter is tiny:
 
 ```yaml
+---
+type: note
 title: "What is a folio?"
-status: active
+status: stable
+---
 ```
 
-The document is whatever you want — headings, lists, tables, code blocks, links. Regular GitHub-flavored Markdown, nothing exotic.
+Everything after the closing `---` is the document, and it is whatever you want — headings, lists, tables, code blocks, links. Regular GitHub-flavored Markdown, nothing exotic.
 
 ## Why folios instead of a wiki
 
@@ -36,11 +45,10 @@ You still get a wiki-like editing experience, but the content lives next to the 
 
 Try it. Open this document, add a section under the one you are reading, save it. The change is recorded by the knowledge store and shows up immediately the next time someone opens the folio.
 
-If you want to start fresh, delete this folio and create your own. A minimal folio is two files:
+If you want to start fresh, delete this folio and create your own. A minimal folio is one file:
 
 ```
-knowledge/folios/hello-team.folio.yaml
-knowledge/folio-documents/hello-team.md
+knowledge/folios/hello-team.folio.md
 ```
 
 That is the entire feature.
